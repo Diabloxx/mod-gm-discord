@@ -1,41 +1,88 @@
 # GM Discord module configuration
+# This file documents all runtime options used by the module. Copy to your server config
+# and adjust values to fit your GM workflow and security policy.
 
+# Master switch for the module (0 = disabled, 1 = enabled)
 GMDiscord.Enable = 1
 
 # Discord bot settings (in-process bot)
+# The bot runs inside worldserver. If you enable it, a failure in the bot can affect the server.
+# Use a dedicated Discord bot account and keep the token private.
 GMDiscord.Bot.Enable = 0
+# Discord application/bot ID (numeric). Required when the bot is enabled.
 GMDiscord.Bot.Id = ""
+# Discord bot token (string). Required when the bot is enabled.
 GMDiscord.Bot.Token = ""
+# Optional: limit slash commands to a single guild for faster registration.
+# Set to 0 to register globally.
 GMDiscord.Bot.GuildId = 0
+# Channel ID where outbox events are posted. Set to 0 to disable posting.
 GMDiscord.Bot.OutboxChannelId = 0
 
-# Poll interval for reading commands from gm_discord_inbox (milliseconds)
+# Poll interval for reading commands from gm_discord_inbox (milliseconds).
+# Lower values reduce latency but increase DB load.
 GMDiscord.PollIntervalMs = 1000
 
-# Max commands processed per poll
+# Max actions processed per poll. Limits burst load from Discord.
 GMDiscord.MaxBatchSize = 25
 
-# Minimum GM security level required to execute commands from Discord
+# Minimum GM security level required to execute commands from Discord (global minimum)
 # 1=SEC_MODERATOR, 2=SEC_GAMEMASTER, 3=SEC_ADMINISTRATOR, 4=SEC_CONSOLE
 GMDiscord.MinSecurityLevel = 2
 
-# Allow any command to run as console (dangerous). If 0, only allow prefixes in CommandAllowList
+# Allow any command to run as console (dangerous). If 0, only allow prefixes in CommandAllowList.
+# Even when enabled, category security checks still apply.
 GMDiscord.CommandAllowAll = 0
 
 # Command prefixes allowed when CommandAllowAll = 0 (case-insensitive, ';' or ',' separated)
+# Example: .ticket;.gm;.tele
 GMDiscord.CommandAllowList = .ticket;.gm
 
-# Link code validity (seconds). Use in-game .gmdiscord link to generate a code
+# Command category security levels (0-4).
+# Categories are inferred from the first token of the command after the leading dot.
+# The required level is max(MinSecurityLevel, Category.MinSecurity).
+GMDiscord.CommandCategory.ticket.MinSecurity = 2
+GMDiscord.CommandCategory.tele.MinSecurity = 2
+GMDiscord.CommandCategory.gm.MinSecurity = 2
+GMDiscord.CommandCategory.ban.MinSecurity = 3
+GMDiscord.CommandCategory.account.MinSecurity = 3
+GMDiscord.CommandCategory.character.MinSecurity = 2
+GMDiscord.CommandCategory.lookup.MinSecurity = 1
+GMDiscord.CommandCategory.server.MinSecurity = 3
+GMDiscord.CommandCategory.debug.MinSecurity = 3
+GMDiscord.CommandCategory.whisper.MinSecurity = 2
+GMDiscord.CommandCategory.misc.MinSecurity = 2
+
+# Link code validity (seconds). Deprecated in current flow.
+# Use in-game .discord link <secret> instead.
 GMDiscord.LinkCodeTtlSeconds = 900
 
 # Secret validity (seconds). Use in-game .discord link <secret>
+# The secret is one-time, hashed (Argon2), and cleared after successful linking.
 GMDiscord.SecretTtlSeconds = 900
 
 # Max command output captured and returned to Discord bot
+# Large outputs are truncated to this length.
 GMDiscord.MaxResultLength = 4000
 
+# Rate limiting & spam protection
+# Applies per Discord user across all actions (auth, command, whisper).
+GMDiscord.RateLimit.Enable = 1
+# Sliding window size in seconds.
+GMDiscord.RateLimit.WindowSeconds = 10
+# Max actions allowed within the window.
+GMDiscord.RateLimit.MaxActions = 5
+# Minimum time between actions in milliseconds.
+GMDiscord.RateLimit.MinIntervalMs = 500
+
+# Audit logging
+# Stores all actions in gm_discord_audit. Payload is truncated to this length.
+GMDiscord.Audit.PayloadMax = 1024
+
 # Outbox events (ticket + command results)
+# When disabled, no events are inserted into gm_discord_outbox.
 GMDiscord.Outbox.Enable = 1
 
 # Whisper relay (Discord -> player and player -> Discord)
+# Requires verified link + sufficient security level.
 GMDiscord.Whisper.Enable = 1

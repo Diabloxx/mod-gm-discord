@@ -43,6 +43,23 @@ CREATE TABLE `gm_discord_outbox` (
   KEY `idx_event_type` (`event_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+DROP TABLE IF EXISTS `gm_discord_audit`;
+CREATE TABLE `gm_discord_audit` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `discord_user_id` BIGINT UNSIGNED NOT NULL,
+  `account_id` INT UNSIGNED NOT NULL DEFAULT 0,
+  `action` VARCHAR(16) NOT NULL,
+  `category` VARCHAR(32) NOT NULL,
+  `status` VARCHAR(16) NOT NULL,
+  `detail` VARCHAR(255) NOT NULL,
+  `payload` TEXT NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_discord_user_id` (`discord_user_id`),
+  KEY `idx_action` (`action`),
+  KEY `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 DROP TABLE IF EXISTS `gm_discord_whisper_session`;
 CREATE TABLE `gm_discord_whisper_session` (
   `player_guid` BIGINT UNSIGNED NOT NULL,

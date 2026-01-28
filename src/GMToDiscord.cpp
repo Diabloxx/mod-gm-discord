@@ -35,8 +35,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <deque>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 using namespace Acore::ChatCommands;
@@ -49,16 +51,23 @@ namespace GMDiscord
 		bool outboxEnabled = true;
 		bool whisperEnabled = true;
 		bool allowAllCommands = false;
+		bool rateLimitEnabled = true;
 		uint32 pollIntervalMs = 1000;
 		uint32 maxBatchSize = 25;
 		uint32 minSecurity = SEC_GAMEMASTER;
 		uint32 linkCodeTtlSeconds = 900;
 		uint32 secretTtlSeconds = 900;
 		uint32 maxResultLength = 4000;
+		uint32 rateLimitWindowSeconds = 10;
+		uint32 rateLimitMaxActions = 5;
+		uint32 rateLimitMinIntervalMs = 500;
+		uint32 auditPayloadMax = 1024;
 		std::vector<std::string> commandAllowList;
+		std::unordered_map<std::string, uint32> categoryMinSecurity;
 	};
 
 	static Settings g_Settings;
+	static std::unordered_map<uint64, std::deque<uint64>> g_RateLimiter;
 
 	static std::string Trim(std::string_view value)
 	{
@@ -138,15 +147,38 @@ namespace GMDiscord
 		g_Settings.outboxEnabled = sConfigMgr->GetOption<bool>("GMDiscord.Outbox.Enable", true);
 		g_Settings.whisperEnabled = sConfigMgr->GetOption<bool>("GMDiscord.Whisper.Enable", true);
 		g_Settings.allowAllCommands = sConfigMgr->GetOption<bool>("GMDiscord.CommandAllowAll", false);
+		g_Settings.rateLimitEnabled = sConfigMgr->GetOption<bool>("GMDiscord.RateLimit.Enable", true);
 		g_Settings.pollIntervalMs = sConfigMgr->GetOption<uint32>("GMDiscord.PollIntervalMs", 1000);
 		g_Settings.maxBatchSize = sConfigMgr->GetOption<uint32>("GMDiscord.MaxBatchSize", 25);
 		g_Settings.minSecurity = sConfigMgr->GetOption<uint32>("GMDiscord.MinSecurityLevel", SEC_GAMEMASTER);
 		g_Settings.linkCodeTtlSeconds = sConfigMgr->GetOption<uint32>("GMDiscord.LinkCodeTtlSeconds", 900);
 		g_Settings.secretTtlSeconds = sConfigMgr->GetOption<uint32>("GMDiscord.SecretTtlSeconds", 900);
 		g_Settings.maxResultLength = sConfigMgr->GetOption<uint32>("GMDiscord.MaxResultLength", 4000);
+		g_Settings.rateLimitWindowSeconds = sConfigMgr->GetOption<uint32>("GMDiscord.RateLimit.WindowSeconds", 10);
+		g_Settings.rateLimitMaxActions = sConfigMgr->GetOption<uint32>("GMDiscord.RateLimit.MaxActions", 5);
+		g_Settings.rateLimitMinIntervalMs = sConfigMgr->GetOption<uint32>("GMDiscord.RateLimit.MinIntervalMs", 500);
+		g_Settings.auditPayloadMax = sConfigMgr->GetOption<uint32>("GMDiscord.Audit.PayloadMax", 1024);
 
 		std::string allowList = sConfigMgr->GetOption<std::string>("GMDiscord.CommandAllowList", ".ticket;.gm");
 		g_Settings.commandAllowList = SplitAllowList(allowList);
+
+		g_Settings.categoryMinSecurity.clear();
+		auto setCategory = [&](std::string const& name, uint32 def)
+		{
+			g_Settings.categoryMinSecurity[name] = sConfigMgr->GetOption<uint32>(
+				Acore::StringFormat("GMDiscord.CommandCategory.{}.MinSecurity", name), def);
+		};
+		setCategory("ticket", SEC_GAMEMASTER);
+		setCategory("tele", SEC_GAMEMASTER);
+		setCategory("gm", SEC_GAMEMASTER);
+		setCategory("ban", SEC_ADMINISTRATOR);
+		setCategory("account", SEC_ADMINISTRATOR);
+		setCategory("character", SEC_GAMEMASTER);
+		setCategory("lookup", SEC_MODERATOR);
+		setCategory("server", SEC_ADMINISTRATOR);
+		setCategory("debug", SEC_ADMINISTRATOR);
+		setCategory("whisper", SEC_GAMEMASTER);
+		setCategory("misc", SEC_GAMEMASTER);
 	}
 
 	static bool IsCommandAllowed(std::string_view command)
@@ -165,6 +197,104 @@ namespace GMDiscord
 		}
 
 		return false;
+	}
+
+	static std::string GetCommandRoot(std::string_view command)
+	{
+		std::string trimmed = Trim(command);
+		if (trimmed.empty())
+			return {};
+
+		if (trimmed.front() == '.' || trimmed.front() == '!')
+			trimmed.erase(trimmed.begin());
+
+		trimmed = Trim(trimmed);
+		if (trimmed.empty())
+			return {};
+
+		size_t space = trimmed.find(' ');
+		std::string root = (space == std::string::npos) ? trimmed : trimmed.substr(0, space);
+		return ToLower(root);
+	}
+
+	static std::string GetCommandCategory(std::string_view root)
+	{
+		std::string token = ToLower(root);
+		if (token == "ticket" || token == "tickets")
+			return "ticket";
+		if (token == "tele" || token == "teleport" || token == "go")
+			return "tele";
+		if (token == "gm" || token == "gminfo" || token == "gmname")
+			return "gm";
+		if (token == "ban" || token == "unban")
+			return "ban";
+		if (token == "account" || token == "acc")
+			return "account";
+		if (token == "character" || token == "char")
+			return "character";
+		if (token == "lookup" || token == "who" || token == "name")
+			return "lookup";
+		if (token == "server" || token == "shutdown" || token == "restart")
+			return "server";
+		if (token == "debug")
+			return "debug";
+		return "misc";
+	}
+
+	static uint32 GetCategoryMinSecurity(std::string const& category)
+	{
+		auto it = g_Settings.categoryMinSecurity.find(category);
+		if (it != g_Settings.categoryMinSecurity.end())
+			return it->second;
+		return g_Settings.minSecurity;
+	}
+
+	static bool CheckRateLimit(uint64 discordUserId, std::string const& action, std::string& reason)
+	{
+		if (!g_Settings.rateLimitEnabled)
+			return true;
+
+		uint64 nowMs = GameTime::GetGameTime().count();
+		uint64 windowMs = uint64(g_Settings.rateLimitWindowSeconds) * 1000;
+		auto& bucket = g_RateLimiter[discordUserId];
+		while (!bucket.empty() && nowMs - bucket.front() > windowMs)
+			bucket.pop_front();
+
+		if (!bucket.empty() && g_Settings.rateLimitMinIntervalMs > 0 && nowMs - bucket.back() < g_Settings.rateLimitMinIntervalMs)
+		{
+			reason = Acore::StringFormat("Rate limit for {}: wait {} ms", action, g_Settings.rateLimitMinIntervalMs);
+			return false;
+		}
+
+		if (g_Settings.rateLimitMaxActions > 0 && bucket.size() >= g_Settings.rateLimitMaxActions)
+		{
+			reason = Acore::StringFormat("Rate limit exceeded for {}", action);
+			return false;
+		}
+
+		bucket.push_back(nowMs);
+		return true;
+	}
+
+	static std::string TruncateAuditPayload(std::string const& payload)
+	{
+		if (g_Settings.auditPayloadMax == 0 || payload.size() <= g_Settings.auditPayloadMax)
+			return payload;
+		return payload.substr(0, g_Settings.auditPayloadMax);
+	}
+
+	static void LogAudit(uint64 discordUserId, uint32 accountId, std::string const& action, std::string const& category,
+		std::string const& status, std::string const& detail, std::string const& payload)
+	{
+		std::string actionEsc = EscapeSql(action);
+		std::string categoryEsc = EscapeSql(category);
+		std::string statusEsc = EscapeSql(status);
+		std::string detailEsc = EscapeSql(detail);
+		std::string payloadEsc = EscapeSql(TruncateAuditPayload(payload));
+		CharacterDatabase.Execute(Acore::StringFormat(
+			"INSERT INTO gm_discord_audit (discord_user_id, account_id, action, category, status, detail, payload) "
+			"VALUES ({}, {}, '{}', '{}', '{}', '{}', '{}')",
+			discordUserId, accountId, actionEsc, categoryEsc, statusEsc, detailEsc, payloadEsc));
 	}
 
 	static void EnqueueOutbox(std::string const& eventType, std::string const& payload)
@@ -250,8 +380,9 @@ namespace GMDiscord
 		return true;
 	}
 
-	static bool VerifyAndLinkSecret(uint64 discordUserId, std::string const& secret)
+	static bool VerifyAndLinkSecret(uint64 discordUserId, std::string const& secret, uint32& outAccountId)
 	{
+		outAccountId = 0;
 		QueryResult result = CharacterDatabase.Query(
 			"SELECT account_id, secret_hash FROM gm_discord_link WHERE secret_hash IS NOT NULL AND secret_expires_at > NOW()");
 
@@ -271,11 +402,35 @@ namespace GMDiscord
 				CharacterDatabase.Execute(Acore::StringFormat(
 					"UPDATE gm_discord_link SET discord_user_id={}, verified=1, secret_hash=NULL, secret_expires_at=NULL, updated_at=NOW() WHERE account_id={} LIMIT 1",
 					discordUserId, accountId));
+				outAccountId = accountId;
 				return true;
 			}
 		} while (result->NextRow());
 
 		return false;
+	}
+
+	static bool CheckCommandPermissions(std::string_view command, uint32 accountId, std::string& outCategory, std::string& outReason)
+	{
+		if (!IsCommandAllowed(command))
+		{
+			outReason = "Command not allowed by GMDiscord.CommandAllowList";
+			return false;
+		}
+
+		std::string root = GetCommandRoot(command);
+		outCategory = GetCommandCategory(root);
+		uint32 security = AccountMgr::GetSecurity(accountId);
+		uint32 categoryMin = GetCategoryMinSecurity(outCategory);
+		uint32 required = std::max(g_Settings.minSecurity, categoryMin);
+
+		if (security < required)
+		{
+			outReason = Acore::StringFormat("Account security too low for category '{}'", outCategory);
+			return false;
+		}
+
+		return true;
 	}
 
 	struct CommandContext
@@ -369,59 +524,71 @@ namespace GMDiscord
 			std::string action = ToLower(fields[2].Get<std::string>());
 			std::string payload = fields[3].Get<std::string>();
 
+			std::string rateReason;
+			if (!CheckRateLimit(discordUserId, action, rateReason))
+			{
+				MarkInboxResult(id, "rate_limited", rateReason);
+				LogAudit(discordUserId, 0, action, action, "rate_limited", rateReason, payload);
+				continue;
+			}
+
 			if (action == "command")
 			{
-				if (!IsCommandAllowed(payload))
-				{
-					MarkInboxResult(id, "forbidden", "Command not allowed by GMDiscord.CommandAllowList");
-					continue;
-				}
-
 				uint32 accountId = 0;
 				bool verified = false;
 				if (!GetLinkedAccount(discordUserId, accountId, verified))
 				{
 					MarkInboxResult(id, "not_linked", "Discord user is not linked to a GM account");
+					LogAudit(discordUserId, accountId, action, "command", "not_linked", "Discord user is not linked", payload);
 					continue;
 				}
 
 				if (!verified)
 				{
 					MarkInboxResult(id, "not_verified", "Discord user is not verified");
+					LogAudit(discordUserId, accountId, action, "command", "not_verified", "Discord user is not verified", payload);
 					continue;
 				}
 
-				uint32 security = AccountMgr::GetSecurity(accountId);
-				if (security < g_Settings.minSecurity)
+				std::string category;
+				std::string reason;
+				if (!CheckCommandPermissions(payload, accountId, category, reason))
 				{
-					MarkInboxResult(id, "forbidden", "Account security is too low");
+					MarkInboxResult(id, "forbidden", reason);
+					LogAudit(discordUserId, accountId, action, category.empty() ? "command" : category, "forbidden", reason, payload);
 					continue;
 				}
 
 				MarkInboxProcessing(id);
 				QueueCommand(id, discordUserId, accountId, payload);
+				LogAudit(discordUserId, accountId, action, category, "queued", "Command queued", payload);
 			}
 			else if (action == "auth")
 			{
 				if (payload.empty())
 				{
 					MarkInboxResult(id, "invalid", "Missing secret payload");
+					LogAudit(discordUserId, 0, action, "auth", "invalid", "Missing secret payload", payload);
 					continue;
 				}
 
-				if (!VerifyAndLinkSecret(discordUserId, payload))
+				uint32 linkedAccountId = 0;
+				if (!VerifyAndLinkSecret(discordUserId, payload, linkedAccountId))
 				{
 					MarkInboxResult(id, "invalid", "Secret not found or expired");
+					LogAudit(discordUserId, 0, action, "auth", "invalid", "Secret not found or expired", payload);
 					continue;
 				}
 
 				MarkInboxResult(id, "ok", "Discord user linked successfully");
+				LogAudit(discordUserId, linkedAccountId, action, "auth", "ok", "Discord user linked successfully", payload);
 			}
 			else if (action == "whisper")
 			{
 				if (!g_Settings.whisperEnabled)
 				{
 					MarkInboxResult(id, "disabled", "Whisper relay disabled");
+					LogAudit(discordUserId, 0, action, "whisper", "disabled", "Whisper relay disabled", payload);
 					continue;
 				}
 
@@ -430,13 +597,16 @@ namespace GMDiscord
 				if (!GetLinkedAccount(discordUserId, accountId, verified) || !verified)
 				{
 					MarkInboxResult(id, "not_verified", "Discord user is not verified");
+					LogAudit(discordUserId, accountId, action, "whisper", "not_verified", "Discord user is not verified", payload);
 					continue;
 				}
 
 				uint32 security = AccountMgr::GetSecurity(accountId);
-				if (security < g_Settings.minSecurity)
+				uint32 required = std::max(g_Settings.minSecurity, GetCategoryMinSecurity("whisper"));
+				if (security < required)
 				{
 					MarkInboxResult(id, "forbidden", "Account security is too low");
+					LogAudit(discordUserId, accountId, action, "whisper", "forbidden", "Account security is too low", payload);
 					continue;
 				}
 
@@ -446,6 +616,7 @@ namespace GMDiscord
 				if (!ParseWhisperPayload(payload, playerName, gmName, message))
 				{
 					MarkInboxResult(id, "invalid", "Invalid whisper payload");
+					LogAudit(discordUserId, accountId, action, "whisper", "invalid", "Invalid whisper payload", payload);
 					continue;
 				}
 
@@ -453,16 +624,19 @@ namespace GMDiscord
 				if (!player)
 				{
 					MarkInboxResult(id, "player_offline", "Player is offline");
+					LogAudit(discordUserId, accountId, action, "whisper", "player_offline", "Player is offline", payload);
 					continue;
 				}
 
 				SendWhisperToPlayer(player, gmName, message);
 				UpsertWhisperSession(player, discordUserId, gmName);
 				MarkInboxResult(id, "ok", "Whisper delivered");
+				LogAudit(discordUserId, accountId, action, "whisper", "ok", "Whisper delivered", payload);
 			}
 			else
 			{
 				MarkInboxResult(id, "invalid", "Unknown action");
+				LogAudit(discordUserId, 0, action, action, "invalid", "Unknown action", payload);
 			}
 		} while (result->NextRow());
 	}
