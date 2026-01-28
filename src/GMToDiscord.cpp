@@ -22,6 +22,7 @@
 #include "CommandScript.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "GMDiscordBot.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Random.h"
@@ -422,6 +423,21 @@ namespace GMDiscord
 					continue;
 				}
 
+				uint32 accountId = 0;
+				bool verified = false;
+				if (!GetLinkedAccount(discordUserId, accountId, verified) || !verified)
+				{
+					MarkInboxResult(id, "not_verified", "Discord user is not verified");
+					continue;
+				}
+
+				uint32 security = AccountMgr::GetSecurity(accountId);
+				if (security < g_Settings.minSecurity)
+				{
+					MarkInboxResult(id, "forbidden", "Account security is too low");
+					continue;
+				}
+
 				std::string playerName;
 				std::string gmName;
 				std::string message;
@@ -509,6 +525,17 @@ public:
 	void OnAfterConfigLoad(bool /*reload*/) override
 	{
 		GMDiscord::LoadSettings();
+		GMDiscord::DiscordBot::Instance().LoadConfig();
+	}
+
+	void OnStartup() override
+	{
+		GMDiscord::DiscordBot::Instance().Start();
+	}
+
+	void OnShutdown() override
+	{
+		GMDiscord::DiscordBot::Instance().Stop();
 	}
 
 	void OnUpdate(uint32 diff) override
@@ -581,15 +608,18 @@ public:
 
 		uint32 accountId = session->GetAccountId();
 		std::string hashEsc = GMDiscord::EscapeSql(*hash);
+		std::string gmNameEsc = GMDiscord::EscapeSql(session->GetPlayer()->GetName());
 		CharacterDatabase.Execute(Acore::StringFormat(
-			"INSERT INTO gm_discord_link (account_id, discord_user_id, verified, secret_hash, secret_expires_at) "
-			"VALUES ({}, NULL, 0, '{}', DATE_ADD(NOW(), INTERVAL {} SECOND)) "
-			"ON DUPLICATE KEY UPDATE discord_user_id=NULL, verified=0, secret_hash='{}', secret_expires_at=DATE_ADD(NOW(), INTERVAL {} SECOND), updated_at=NOW()",
+			"INSERT INTO gm_discord_link (account_id, discord_user_id, verified, secret_hash, secret_expires_at, gm_name) "
+			"VALUES ({}, NULL, 0, '{}', DATE_ADD(NOW(), INTERVAL {} SECOND), '{}') "
+			"ON DUPLICATE KEY UPDATE discord_user_id=NULL, verified=0, secret_hash='{}', secret_expires_at=DATE_ADD(NOW(), INTERVAL {} SECOND), gm_name='{}', updated_at=NOW()",
 			accountId,
 			hashEsc,
 			GMDiscord::g_Settings.secretTtlSeconds,
+			gmNameEsc,
 			hashEsc,
-			GMDiscord::g_Settings.secretTtlSeconds));
+			GMDiscord::g_Settings.secretTtlSeconds,
+			gmNameEsc));
 
 		handler->PSendSysMessage("Discord link secret set. It expires in {} minutes.", GMDiscord::g_Settings.secretTtlSeconds / 60);
 		return true;

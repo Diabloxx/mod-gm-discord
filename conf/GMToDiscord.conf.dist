@@ -2,6 +2,13 @@
 
 GMDiscord.Enable = 1
 
+# Discord bot settings (in-process bot)
+GMDiscord.Bot.Enable = 0
+GMDiscord.Bot.Id = ""
+GMDiscord.Bot.Token = ""
+GMDiscord.Bot.GuildId = 0
+GMDiscord.Bot.OutboxChannelId = 0
+
 # Poll interval for reading commands from gm_discord_inbox (milliseconds)
 GMDiscord.PollIntervalMs = 1000
 

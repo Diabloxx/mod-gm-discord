@@ -7,6 +7,7 @@ CREATE TABLE `gm_discord_link` (
   `verified` TINYINT NOT NULL DEFAULT 0,
   `secret_hash` VARCHAR(128) NULL,
   `secret_expires_at` DATETIME NULL,
+  `gm_name` VARCHAR(24) NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`account_id`),
