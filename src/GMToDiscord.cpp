@@ -16,16 +16,20 @@
  */
 
 #include "AccountMgr.h"
+#include "Argon2.h"
+#include "BigNumber.h"
 #include "Chat.h"
 #include "CommandScript.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "Random.h"
 #include "ScriptMgr.h"
 #include "StringFormat.h"
 #include "TicketMgr.h"
 #include "World.h"
+#include "WorldPacket.h"
 
 #include <algorithm>
 #include <cctype>
@@ -41,11 +45,13 @@ namespace GMDiscord
 	{
 		bool enabled = true;
 		bool outboxEnabled = true;
+		bool whisperEnabled = true;
 		bool allowAllCommands = false;
 		uint32 pollIntervalMs = 1000;
 		uint32 maxBatchSize = 25;
 		uint32 minSecurity = SEC_GAMEMASTER;
 		uint32 linkCodeTtlSeconds = 900;
+		uint32 secretTtlSeconds = 900;
 		uint32 maxResultLength = 4000;
 		std::vector<std::string> commandAllowList;
 	};
@@ -128,11 +134,13 @@ namespace GMDiscord
 	{
 		g_Settings.enabled = sConfigMgr->GetOption<bool>("GMDiscord.Enable", true);
 		g_Settings.outboxEnabled = sConfigMgr->GetOption<bool>("GMDiscord.Outbox.Enable", true);
+		g_Settings.whisperEnabled = sConfigMgr->GetOption<bool>("GMDiscord.Whisper.Enable", true);
 		g_Settings.allowAllCommands = sConfigMgr->GetOption<bool>("GMDiscord.CommandAllowAll", false);
 		g_Settings.pollIntervalMs = sConfigMgr->GetOption<uint32>("GMDiscord.PollIntervalMs", 1000);
 		g_Settings.maxBatchSize = sConfigMgr->GetOption<uint32>("GMDiscord.MaxBatchSize", 25);
 		g_Settings.minSecurity = sConfigMgr->GetOption<uint32>("GMDiscord.MinSecurityLevel", SEC_GAMEMASTER);
 		g_Settings.linkCodeTtlSeconds = sConfigMgr->GetOption<uint32>("GMDiscord.LinkCodeTtlSeconds", 900);
+		g_Settings.secretTtlSeconds = sConfigMgr->GetOption<uint32>("GMDiscord.SecretTtlSeconds", 900);
 		g_Settings.maxResultLength = sConfigMgr->GetOption<uint32>("GMDiscord.MaxResultLength", 4000);
 
 		std::string allowList = sConfigMgr->GetOption<std::string>("GMDiscord.CommandAllowList", ".ticket;.gm");
@@ -183,6 +191,89 @@ namespace GMDiscord
 		CharacterDatabase.Execute(Acore::StringFormat(
 			"UPDATE gm_discord_inbox SET processed=2 WHERE id={} AND processed=0",
 			id));
+	}
+
+	static bool ParseWhisperPayload(std::string const& payload, std::string& playerName, std::string& gmName, std::string& message)
+	{
+		size_t first = payload.find('|');
+		if (first == std::string::npos)
+			return false;
+		size_t second = payload.find('|', first + 1);
+		if (second == std::string::npos)
+			return false;
+
+		playerName = payload.substr(0, first);
+		gmName = payload.substr(first + 1, second - first - 1);
+		message = payload.substr(second + 1);
+		playerName = Trim(playerName);
+		gmName = Trim(gmName);
+		message = Trim(message);
+		return !playerName.empty() && !gmName.empty() && !message.empty();
+	}
+
+	static void SendWhisperToPlayer(Player* player, std::string const& gmName, std::string const& message)
+	{
+		if (!player || !player->GetSession())
+			return;
+
+		WorldPacket data;
+		ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_UNIVERSAL,
+			ObjectGuid::Empty, player->GetGUID(), message, 0, gmName, player->GetName());
+		player->GetSession()->SendPacket(&data);
+	}
+
+	static void UpsertWhisperSession(Player* player, uint64 discordUserId, std::string const& gmName)
+	{
+		if (!player)
+			return;
+
+		std::string gmEsc = EscapeSql(gmName);
+		CharacterDatabase.Execute(Acore::StringFormat(
+			"REPLACE INTO gm_discord_whisper_session (player_guid, discord_user_id, gm_name, updated_at) "
+			"VALUES ({}, {}, '{}', NOW())",
+			player->GetGUID().GetRawValue(), discordUserId, gmEsc));
+	}
+
+	static bool TryGetWhisperSession(std::string const& gmName, uint64& discordUserId)
+	{
+		std::string gmEsc = EscapeSql(gmName);
+		QueryResult result = CharacterDatabase.Query(Acore::StringFormat(
+			"SELECT discord_user_id FROM gm_discord_whisper_session WHERE LOWER(gm_name) = LOWER('{}') LIMIT 1",
+			gmEsc));
+
+		if (!result)
+			return false;
+
+		discordUserId = (*result)[0].Get<uint64>();
+		return true;
+	}
+
+	static bool VerifyAndLinkSecret(uint64 discordUserId, std::string const& secret)
+	{
+		QueryResult result = CharacterDatabase.Query(
+			"SELECT account_id, secret_hash FROM gm_discord_link WHERE secret_hash IS NOT NULL AND secret_expires_at > NOW()");
+
+		if (!result)
+			return false;
+
+		do
+		{
+			Field* fields = result->Fetch();
+			uint32 accountId = fields[0].Get<uint32>();
+			std::string hash = fields[1].Get<std::string>();
+			if (hash.empty())
+				continue;
+
+			if (Acore::Crypto::Argon2::Verify(secret, hash))
+			{
+				CharacterDatabase.Execute(Acore::StringFormat(
+					"UPDATE gm_discord_link SET discord_user_id={}, verified=1, secret_hash=NULL, secret_expires_at=NULL, updated_at=NOW() WHERE account_id={} LIMIT 1",
+					discordUserId, accountId));
+				return true;
+			}
+		} while (result->NextRow());
+
+		return false;
 	}
 
 	struct CommandContext
@@ -261,7 +352,7 @@ namespace GMDiscord
 			return;
 
 		QueryResult result = CharacterDatabase.Query(Acore::StringFormat(
-			"SELECT id, discord_user_id, command FROM gm_discord_inbox WHERE processed=0 ORDER BY id ASC LIMIT {}",
+			"SELECT id, discord_user_id, action, payload FROM gm_discord_inbox WHERE processed=0 ORDER BY id ASC LIMIT {}",
 			g_Settings.maxBatchSize));
 
 		if (!result)
@@ -272,37 +363,89 @@ namespace GMDiscord
 			Field* fields = result->Fetch();
 			uint32 id = fields[0].Get<uint32>();
 			uint64 discordUserId = fields[1].Get<uint64>();
-			std::string command = fields[2].Get<std::string>();
+			std::string action = ToLower(fields[2].Get<std::string>());
+			std::string payload = fields[3].Get<std::string>();
 
-			if (!IsCommandAllowed(command))
+			if (action == "command")
 			{
-				MarkInboxResult(id, "forbidden", "Command not allowed by GMDiscord.CommandAllowList");
-				continue;
-			}
+				if (!IsCommandAllowed(payload))
+				{
+					MarkInboxResult(id, "forbidden", "Command not allowed by GMDiscord.CommandAllowList");
+					continue;
+				}
 
-			uint32 accountId = 0;
-			bool verified = false;
-			if (!GetLinkedAccount(discordUserId, accountId, verified))
+				uint32 accountId = 0;
+				bool verified = false;
+				if (!GetLinkedAccount(discordUserId, accountId, verified))
+				{
+					MarkInboxResult(id, "not_linked", "Discord user is not linked to a GM account");
+					continue;
+				}
+
+				if (!verified)
+				{
+					MarkInboxResult(id, "not_verified", "Discord user is not verified");
+					continue;
+				}
+
+				uint32 security = AccountMgr::GetSecurity(accountId);
+				if (security < g_Settings.minSecurity)
+				{
+					MarkInboxResult(id, "forbidden", "Account security is too low");
+					continue;
+				}
+
+				MarkInboxProcessing(id);
+				QueueCommand(id, discordUserId, accountId, payload);
+			}
+			else if (action == "auth")
 			{
-				MarkInboxResult(id, "not_linked", "Discord user is not linked to a GM account");
-				continue;
-			}
+				if (payload.empty())
+				{
+					MarkInboxResult(id, "invalid", "Missing secret payload");
+					continue;
+				}
 
-			if (!verified)
+				if (!VerifyAndLinkSecret(discordUserId, payload))
+				{
+					MarkInboxResult(id, "invalid", "Secret not found or expired");
+					continue;
+				}
+
+				MarkInboxResult(id, "ok", "Discord user linked successfully");
+			}
+			else if (action == "whisper")
 			{
-				MarkInboxResult(id, "not_verified", "Discord user is not verified");
-				continue;
-			}
+				if (!g_Settings.whisperEnabled)
+				{
+					MarkInboxResult(id, "disabled", "Whisper relay disabled");
+					continue;
+				}
 
-			uint32 security = AccountMgr::GetSecurity(accountId);
-			if (security < g_Settings.minSecurity)
+				std::string playerName;
+				std::string gmName;
+				std::string message;
+				if (!ParseWhisperPayload(payload, playerName, gmName, message))
+				{
+					MarkInboxResult(id, "invalid", "Invalid whisper payload");
+					continue;
+				}
+
+				Player* player = ObjectAccessor::FindPlayerByName(playerName, false);
+				if (!player)
+				{
+					MarkInboxResult(id, "player_offline", "Player is offline");
+					continue;
+				}
+
+				SendWhisperToPlayer(player, gmName, message);
+				UpsertWhisperSession(player, discordUserId, gmName);
+				MarkInboxResult(id, "ok", "Whisper delivered");
+			}
+			else
 			{
-				MarkInboxResult(id, "forbidden", "Account security is too low");
-				continue;
+				MarkInboxResult(id, "invalid", "Unknown action");
 			}
-
-			MarkInboxProcessing(id);
-			QueueCommand(id, discordUserId, accountId, command);
 		} while (result->NextRow());
 	}
 
@@ -404,13 +547,14 @@ public:
 
 		static ChatCommandTable commandTable =
 		{
+			{ "discord", gmDiscordSubTable },
 			{ "gmdiscord", gmDiscordSubTable }
 		};
 
 		return commandTable;
 	}
 
-	static bool HandleLinkCommand(ChatHandler* handler)
+	static bool HandleLinkCommand(ChatHandler* handler, std::string secret)
 	{
 		WorldSession* session = handler->GetSession();
 		if (!session)
@@ -419,22 +563,35 @@ public:
 			return false;
 		}
 
+		secret = GMDiscord::Trim(secret);
+		if (secret.size() < 8)
+		{
+			handler->SendErrorMessage("Secret must be at least 8 characters.");
+			return false;
+		}
+
+		BigNumber salt;
+		salt.SetRand(128);
+		Optional<std::string> hash = Acore::Crypto::Argon2::Hash(secret, salt);
+		if (!hash)
+		{
+			handler->SendErrorMessage("Failed to hash secret.");
+			return false;
+		}
+
 		uint32 accountId = session->GetAccountId();
-		uint32 code = urand(100000, 999999);
-
+		std::string hashEsc = GMDiscord::EscapeSql(*hash);
 		CharacterDatabase.Execute(Acore::StringFormat(
-			"INSERT INTO gm_discord_link (account_id, discord_user_id, verified, link_code, link_code_expires) "
+			"INSERT INTO gm_discord_link (account_id, discord_user_id, verified, secret_hash, secret_expires_at) "
 			"VALUES ({}, NULL, 0, '{}', DATE_ADD(NOW(), INTERVAL {} SECOND)) "
-			"ON DUPLICATE KEY UPDATE discord_user_id=NULL, verified=0, link_code='{}', link_code_expires=DATE_ADD(NOW(), INTERVAL {} SECOND)",
+			"ON DUPLICATE KEY UPDATE discord_user_id=NULL, verified=0, secret_hash='{}', secret_expires_at=DATE_ADD(NOW(), INTERVAL {} SECOND), updated_at=NOW()",
 			accountId,
-			code,
-			GMDiscord::g_Settings.linkCodeTtlSeconds,
-			code,
-			GMDiscord::g_Settings.linkCodeTtlSeconds));
+			hashEsc,
+			GMDiscord::g_Settings.secretTtlSeconds,
+			hashEsc,
+			GMDiscord::g_Settings.secretTtlSeconds));
 
-		handler->PSendSysMessage("Your GM Discord link code is: {} (valid for {} minutes)",
-			code, GMDiscord::g_Settings.linkCodeTtlSeconds / 60);
-		handler->PSendSysMessage("Use this code in Discord to link your account.");
+		handler->PSendSysMessage("Discord link secret set. It expires in {} minutes.", GMDiscord::g_Settings.secretTtlSeconds / 60);
 		return true;
 	}
 
@@ -449,7 +606,7 @@ public:
 
 		uint32 accountId = session->GetAccountId();
 		QueryResult result = CharacterDatabase.Query(Acore::StringFormat(
-			"SELECT discord_user_id, verified FROM gm_discord_link WHERE account_id={} LIMIT 1",
+			"SELECT discord_user_id, verified, secret_expires_at FROM gm_discord_link WHERE account_id={} LIMIT 1",
 			accountId));
 
 		if (!result)
@@ -461,8 +618,12 @@ public:
 		Field* fields = result->Fetch();
 		uint64 discordId = fields[0].Get<uint64>();
 		bool verified = fields[1].Get<uint8>() != 0;
+		bool hasSecret = !fields[2].IsNull();
 
-		handler->PSendSysMessage("Discord link status: {} (Discord ID: {})", verified ? "verified" : "pending", discordId ? std::to_string(discordId) : "none");
+		handler->PSendSysMessage("Discord link status: {} (Discord ID: {}, Secret: {})",
+			verified ? "verified" : "pending",
+			discordId ? std::to_string(discordId) : "none",
+			hasSecret ? "set" : "not set");
 		return true;
 	}
 
@@ -485,10 +646,49 @@ public:
 	}
 };
 
+class GMDiscordPlayerScript : public PlayerScript
+{
+public:
+	GMDiscordPlayerScript() : PlayerScript("GMDiscordPlayerScript") { }
+
+	bool OnPlayerWhisper(Player* player, uint32 type, uint32 language, std::string& msg, std::string const& receiverName, Player* receiver) override
+	{
+		if (!GMDiscord::g_Settings.enabled || !GMDiscord::g_Settings.whisperEnabled)
+			return true;
+
+		if (!player || type != CHAT_MSG_WHISPER)
+			return true;
+
+		if (receiver)
+			return true;
+
+		uint64 discordUserId = 0;
+		if (!GMDiscord::TryGetWhisperSession(receiverName, discordUserId))
+			return true;
+
+		uint32 ticketId = 0;
+		if (GmTicket* ticket = sTicketMgr->GetTicketByPlayer(player->GetGUID()))
+			ticketId = ticket->GetId();
+
+		std::string payload = Acore::StringFormat(
+			R"({"event":"player_whisper","player":"{}","playerGuid":{},"gmName":"{}","discordUserId":{},"ticketId":{},"message":"{}"})",
+			GMDiscord::EscapeJson(player->GetName()),
+			player->GetGUID().GetRawValue(),
+			GMDiscord::EscapeJson(receiverName),
+			discordUserId,
+			ticketId,
+			GMDiscord::EscapeJson(msg));
+		GMDiscord::EnqueueOutbox("player_whisper", payload);
+
+		return false; // handled, prevent "player not found"
+	}
+};
+
 void AddSC_gm_discord()
 {
 	GMDiscord::LoadSettings();
 	new GMDiscordTicketScript();
 	new GMDiscordWorldScript();
 	new GMDiscordCommandScript();
+	new GMDiscordPlayerScript();
 }

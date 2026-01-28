@@ -21,8 +21,14 @@ GMDiscord.CommandAllowList = .ticket;.gm
 # Link code validity (seconds). Use in-game .gmdiscord link to generate a code
 GMDiscord.LinkCodeTtlSeconds = 900
 
+# Secret validity (seconds). Use in-game .discord link <secret>
+GMDiscord.SecretTtlSeconds = 900
+
 # Max command output captured and returned to Discord bot
 GMDiscord.MaxResultLength = 4000
 
 # Outbox events (ticket + command results)
 GMDiscord.Outbox.Enable = 1
+
+# Whisper relay (Discord -> player and player -> Discord)
+GMDiscord.Whisper.Enable = 1
