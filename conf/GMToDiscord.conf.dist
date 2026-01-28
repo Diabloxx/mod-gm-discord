@@ -1,0 +1,28 @@
+# GM Discord module configuration
+
+GMDiscord.Enable = 1
+
+# Poll interval for reading commands from gm_discord_inbox (milliseconds)
+GMDiscord.PollIntervalMs = 1000
+
+# Max commands processed per poll
+GMDiscord.MaxBatchSize = 25
+
+# Minimum GM security level required to execute commands from Discord
+# 1=SEC_MODERATOR, 2=SEC_GAMEMASTER, 3=SEC_ADMINISTRATOR, 4=SEC_CONSOLE
+GMDiscord.MinSecurityLevel = 2
+
+# Allow any command to run as console (dangerous). If 0, only allow prefixes in CommandAllowList
+GMDiscord.CommandAllowAll = 0
+
+# Command prefixes allowed when CommandAllowAll = 0 (case-insensitive, ';' or ',' separated)
+GMDiscord.CommandAllowList = .ticket;.gm
+
+# Link code validity (seconds). Use in-game .gmdiscord link to generate a code
+GMDiscord.LinkCodeTtlSeconds = 900
+
+# Max command output captured and returned to Discord bot
+GMDiscord.MaxResultLength = 4000
+
+# Outbox events (ticket + command results)
+GMDiscord.Outbox.Enable = 1
