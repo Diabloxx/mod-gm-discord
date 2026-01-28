@@ -87,13 +87,70 @@ Important keys:
 ### Ticket Flow
 - Ticket events are pushed to `gm_discord_outbox` and posted by the bot.
 
+## Outbox JSON Payloads
+All outbox payloads are structured JSON with a top-level `event` and a `timestamp` (epoch ms). Event payloads are nested by domain for stability.
+
+### Ticket Events
+Events: `ticket_create`, `ticket_update`, `ticket_close`, `ticket_status`, `ticket_resolve`
+
+Payload shape:
+
+- `event`: string
+- `ticket`:
+  - `id`: number
+  - `player`: string
+  - `message`: string
+  - `comment`: string
+  - `response`: string
+  - `assignedTo`: string
+  - `assignedToGuid`: number
+  - `status`: `open|closed|completed`
+  - `escalationStatus`: number
+  - `viewed`: 0|1
+  - `needResponse`: 0|1
+  - `needMoreHelp`: 0|1
+  - `createTime`: number
+  - `lastModified`: number
+  - `closedByGuid`: number
+  - `resolvedByGuid`: number
+  - `location`:
+    - `mapId`: number
+    - `x`: number
+    - `y`: number
+    - `z`: number
+
+### Command Results
+Event: `command_result`
+
+Payload shape:
+- `event`: string
+- `command`:
+  - `id`: number
+  - `status`: `ok|error`
+  - `output`: string
+- `timestamp`: number
+
+### Player Whisper Replies
+Event: `player_whisper`
+
+Payload shape:
+- `event`: string
+- `whisper`:
+  - `player`: string
+  - `playerGuid`: number
+  - `gmName`: string
+  - `discordUserId`: number
+  - `ticketId`: number
+  - `message`: string
+- `timestamp`: number
+
 ### Whisper Flow
 - `/gm-whisper` → inbox action `whisper` → server sends whisper.
 - Player reply (whisper to GM name) → outbox `player_whisper`.
 
 ## Todo
 ### High Priority
-- [ ] Add structured JSON payloads for all outbox events (ticket fields, timestamps, status).
+- [x] Add structured JSON payloads for all outbox events (ticket fields, timestamps, status).
 - [ ] Add permission checks per command category (tickets, teleports, etc.).
 - [ ] Add audit log table for all Discord actions.
 - [ ] Add rate limiting and spam protection for Discord commands.

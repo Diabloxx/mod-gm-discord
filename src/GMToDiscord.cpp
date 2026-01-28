@@ -23,6 +23,7 @@
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "GMDiscordBot.h"
+#include "GameTime.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Random.h"
@@ -315,10 +316,11 @@ namespace GMDiscord
 			MarkInboxResult(ctx->id, success ? "ok" : "error", ctx->output);
 
 			std::string payload = Acore::StringFormat(
-				R"({"event":"command_result","id":{},"status":"{}","output":"{}"})",
+				R"({"event":"command_result","command":{"id":{},"status":"{}","output":"{}"},"timestamp":{}})",
 				ctx->id,
 				success ? "ok" : "error",
-				EscapeJson(ctx->output));
+				EscapeJson(ctx->output),
+				GameTime::GetGameTime().count());
 			EnqueueOutbox("command_result", payload);
 
 			delete ctx;
@@ -472,17 +474,30 @@ namespace GMDiscord
 
 		std::string status = ticket->IsClosed() ? "closed" : (ticket->IsCompleted() ? "completed" : "open");
 		std::string assignedTo = ticket->GetAssignedToName();
-		std::string message = ticket->GetMessage();
 
 		return Acore::StringFormat(
-			R"({"event":"{}","ticketId":{},"player":"{}","message":"{}","assignedTo":"{}","status":"{}","lastModified":{}})",
+			R"({"event":"{}","ticket":{"id":{},"player":"{}","message":"{}","comment":"{}","response":"{}","assignedTo":"{}","assignedToGuid":{},"status":"{}","escalationStatus":{},"viewed":{},"needResponse":{},"needMoreHelp":{},"createTime":{},"lastModified":{},"closedByGuid":{},"resolvedByGuid":{},"location":{"mapId":{},"x":{},"y":{},"z":{}}}})",
 			eventName,
 			ticket->GetId(),
 			EscapeJson(ticket->GetPlayerName()),
-			EscapeJson(message),
+			EscapeJson(ticket->GetMessage()),
+			EscapeJson(ticket->GetComment()),
+			EscapeJson(ticket->GetResponseText()),
 			EscapeJson(assignedTo),
+			ticket->GetAssignedToGUID().GetRawValue(),
 			status,
-			ticket->GetLastModifiedTime());
+			static_cast<uint32>(ticket->GetEscalatedStatus()),
+			ticket->IsViewed() ? 1 : 0,
+			ticket->NeedResponse() ? 1 : 0,
+			ticket->NeedMoreHelp() ? 1 : 0,
+			ticket->GetCreateTime(),
+			ticket->GetLastModifiedTime(),
+			ticket->GetClosedByGUID().GetRawValue(),
+			ticket->GetResolvedByGUID().GetRawValue(),
+			ticket->GetMapId(),
+			ticket->GetPositionX(),
+			ticket->GetPositionY(),
+			ticket->GetPositionZ());
 	}
 }
 
@@ -701,13 +716,14 @@ public:
 			ticketId = ticket->GetId();
 
 		std::string payload = Acore::StringFormat(
-			R"({"event":"player_whisper","player":"{}","playerGuid":{},"gmName":"{}","discordUserId":{},"ticketId":{},"message":"{}"})",
+			R"({"event":"player_whisper","whisper":{"player":"{}","playerGuid":{},"gmName":"{}","discordUserId":{},"ticketId":{},"message":"{}"},"timestamp":{}})",
 			GMDiscord::EscapeJson(player->GetName()),
 			player->GetGUID().GetRawValue(),
 			GMDiscord::EscapeJson(receiverName),
 			discordUserId,
 			ticketId,
-			GMDiscord::EscapeJson(msg));
+			GMDiscord::EscapeJson(msg),
+			GameTime::GetGameTime().count());
 		GMDiscord::EnqueueOutbox("player_whisper", payload);
 
 		return false; // handled, prevent "player not found"
