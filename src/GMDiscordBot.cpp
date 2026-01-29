@@ -986,7 +986,7 @@ namespace GMDiscord
 
                 InsertInboxAction(event.command.usr.id, "ticket_close",
                     Acore::StringFormat("{}|{}|{}", ticketId, gmName, reason));
-                event.reply(dpp::message("Ticket close queued.").set_flags(dpp::m_ephemeral));
+                event.reply(dpp::message("Ticket Closed").set_flags(dpp::m_ephemeral));
                 return;
             }
 
