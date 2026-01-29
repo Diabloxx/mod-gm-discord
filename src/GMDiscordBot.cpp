@@ -71,28 +71,6 @@ namespace GMDiscord
             return out;
         }
 
-        static std::unordered_set<uint64_t> ParseRoleList(std::string const& value)
-        {
-            std::unordered_set<uint64_t> out;
-            for (std::string const& entry : Split(value, ','))
-            {
-                std::string roleStr = Trim(entry);
-                if (roleStr.empty())
-                    continue;
-
-                try
-                {
-                    out.insert(std::stoull(roleStr));
-                }
-                catch (...)
-                {
-                    continue;
-                }
-            }
-
-            return out;
-        }
-
         static std::vector<std::string> Split(std::string const& value, char delim)
         {
             std::vector<std::string> out;
@@ -115,6 +93,48 @@ namespace GMDiscord
             std::string trimmed = Trim(current);
             if (!trimmed.empty())
                 out.emplace_back(trimmed);
+            return out;
+        }
+
+        static std::unordered_set<uint64_t> ParseRoleList(std::string const& value)
+        {
+            std::unordered_set<uint64_t> out;
+            std::string current;
+            for (char ch : value)
+            {
+                if (ch == ',')
+                {
+                    std::string roleStr = Trim(current);
+                    if (!roleStr.empty())
+                    {
+                        try
+                        {
+                            out.insert(std::stoull(roleStr));
+                        }
+                        catch (...)
+                        {
+                        }
+                    }
+                    current.clear();
+                }
+                else
+                {
+                    current.push_back(ch);
+                }
+            }
+
+            std::string roleStr = Trim(current);
+            if (!roleStr.empty())
+            {
+                try
+                {
+                    out.insert(std::stoull(roleStr));
+                }
+                catch (...)
+                {
+                }
+            }
+
             return out;
         }
 
@@ -614,7 +634,6 @@ namespace GMDiscord
         _ticketRoomAllowedRoleIds = ParseRoleList(sConfigMgr->GetOption<std::string>("GMDiscord.Bot.TicketRooms.AllowedRoles", ""));
         _roleMappingsRaw = sConfigMgr->GetOption<std::string>("GMDiscord.Bot.RoleMappings", "");
         _roleCategoryMap = ParseRoleMappings(_roleMappingsRaw);
-        _adminRoleIds.clear();
     }
 
     void DiscordBot::Start()
@@ -693,28 +712,6 @@ namespace GMDiscord
                     cluster->guild_command_create(assign, _guildId);
                 else
                     cluster->global_command_create(assign);
-
-                if (_guildId && _ticketRoomsEnabled && _roleCategoryMap.empty())
-                {
-                    auto* clusterPtr = static_cast<dpp::cluster*>(_cluster);
-                    if (clusterPtr)
-                    {
-                        clusterPtr->guild_get_roles(_guildId, [this](const dpp::confirmation_callback_t& cb)
-                        {
-                            if (cb.is_error())
-                                return;
-
-                            _adminRoleIds.clear();
-                            auto roles = std::get<dpp::role_map>(cb.value);
-                            for (auto const& entry : roles)
-                            {
-                                dpp::role const& role = entry.second;
-                                if ((role.permissions & dpp::p_administrator) == dpp::p_administrator)
-                                    _adminRoleIds.insert(static_cast<uint64_t>(role.id));
-                            }
-                        });
-                    }
-                }
 
                 LOG_INFO("module.gm_discord", "Discord bot ready.");
             }
@@ -797,9 +794,6 @@ namespace GMDiscord
                                         it != _roleCategoryMap.end(); ++it)
                                         allowedRoles.insert(it->first);
                                 }
-
-                                if (allowedRoles.empty())
-                                    allowedRoles.insert(_adminRoleIds.begin(), _adminRoleIds.end());
 
                                 bool allowEveryone = allowedRoles.empty();
                                 if (!allowEveryone)
