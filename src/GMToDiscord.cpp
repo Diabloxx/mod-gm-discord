@@ -768,8 +768,8 @@ namespace GMDiscord
 					CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 					std::string subject = "Ticket Closed";
 					std::string body = Acore::StringFormat("Your ticket #{} has been closed.\n\nReason:\n{}", ticketId, reason);
-					MailDraft(subject, body).SendMailTo(trans, MailReceiver(playerGuid.GetCounter()),
-						MailSender(MAIL_NORMAL, 0, MAIL_STATIONERY_GM));
+				MailDraft(subject, body).SendMailTo(trans, MailReceiver(playerGuid.GetCounter()),
+					MailSender(MAIL_NORMAL, playerGuid.GetCounter(), MAIL_STATIONERY_GM));
 					CharacterDatabase.CommitTransaction(trans);
 				}
 
@@ -1037,7 +1037,17 @@ public:
 		if (GmTicket* ticket = sTicketMgr->GetTicketByPlayer(player->GetGUID()))
 			ticketId = ticket->GetId();
 
-		// ...existing code...
+		std::string payload = Acore::StringFormat(
+			R"({{"event":"player_whisper","whisper":{{"player":"{}","playerGuid":{},"gmName":"{}","discordUserId":{},"ticketId":{},"message":"{}"}},"timestamp":{}}})",
+			GMDiscord::EscapeJson(player->GetName()),
+			player->GetGUID().GetRawValue(),
+			GMDiscord::EscapeJson(receiverName),
+			discordUserId,
+			ticketId,
+			GMDiscord::EscapeJson(msg),
+			GameTime::GetGameTime().count());
+		GMDiscord::EnqueueOutbox("player_whisper", payload);
+		ChatHandler(player->GetSession()).PSendSysMessage("Your reply has been sent to Customer Support.");
 
 		return false; // handled, prevent "player not found"
 	}

@@ -135,18 +135,11 @@ namespace GMDiscord
             dpp::component row1;
             row1.add_component(dpp::component().set_label("Claim").set_style(dpp::cos_primary)
                 .set_id(Acore::StringFormat("gm_ticket_claim:{}", ticketId)));
-            row1.add_component(dpp::component().set_label("Reply").set_style(dpp::cos_secondary)
-                .set_id(Acore::StringFormat("gm_ticket_reply:{}", ticketId)));
             row1.add_component(dpp::component().set_label("Close").set_style(dpp::cos_danger)
                 .set_id(Acore::StringFormat("gm_ticket_close:{}", ticketId)));
-            rows.push_back(row1);
-
-            dpp::component row2;
-            row2.add_component(dpp::component().set_label("Assign").set_style(dpp::cos_primary)
-                .set_id(Acore::StringFormat("gm_ticket_assign:{}", ticketId)));
-            row2.add_component(dpp::component().set_label("Details").set_style(dpp::cos_secondary)
+            row1.add_component(dpp::component().set_label("Details").set_style(dpp::cos_secondary)
                 .set_id(Acore::StringFormat("gm_ticket_details:{}", ticketId)));
-            rows.push_back(row2);
+            rows.push_back(row1);
 
             return rows;
         }
@@ -895,7 +888,7 @@ namespace GMDiscord
                 }
 
                 InsertInboxAction(event.command.usr.id, "ticket_assign", Acore::StringFormat("{}|{}", ticketId, gmName));
-                event.reply(dpp::message("Ticket claim queued.").set_flags(dpp::m_ephemeral));
+                event.reply(dpp::message("Ticket claimed.").set_flags(dpp::m_ephemeral));
                 return;
             }
 
@@ -919,54 +912,6 @@ namespace GMDiscord
                     Acore::StringFormat("gm_ticket_close:{}", ticketId),
                     "Close Ticket",
                     { dpp::component().add_component(reasonInput) });
-                event.dialog(modal);
-                return;
-            }
-
-            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_reply:", ticketId))
-            {
-                if (!HasRoleForCategory(_roleCategoryMap, event.command.member.get_roles(), "whisper"))
-                {
-                    event.reply(dpp::message("You are not allowed to reply to tickets.").set_flags(dpp::m_ephemeral));
-                    return;
-                }
-
-                dpp::component replyInput;
-                replyInput.set_label("Reply message")
-                    .set_id("message")
-                    .set_text_style(dpp::text_paragraph)
-                    .set_min_length(1)
-                    .set_max_length(1000)
-                    .set_required(true);
-
-                dpp::interaction_modal_response modal(
-                    Acore::StringFormat("gm_ticket_reply:{}", ticketId),
-                    "Reply to Ticket",
-                    { dpp::component().add_component(replyInput) });
-                event.dialog(modal);
-                return;
-            }
-
-            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_assign:", ticketId))
-            {
-                if (!HasRoleForCategory(_roleCategoryMap, event.command.member.get_roles(), "ticket"))
-                {
-                    event.reply(dpp::message("You are not allowed to assign tickets.").set_flags(dpp::m_ephemeral));
-                    return;
-                }
-
-                dpp::component gmInput;
-                gmInput.set_label("GM character name")
-                    .set_id("gm_name")
-                    .set_text_style(dpp::text_short)
-                    .set_min_length(1)
-                    .set_max_length(32)
-                    .set_required(true);
-
-                dpp::interaction_modal_response modal(
-                    Acore::StringFormat("gm_ticket_assign:{}", ticketId),
-                    "Assign Ticket",
-                    { dpp::component().add_component(gmInput) });
                 event.dialog(modal);
                 return;
             }
@@ -1042,49 +987,6 @@ namespace GMDiscord
                 return;
             }
 
-            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_reply:", ticketId))
-            {
-                std::string messageText = Trim(GetModalValue(event.components, "message"));
-                if (messageText.empty())
-                {
-                    event.reply(dpp::message("Reply message is required.").set_flags(dpp::m_ephemeral));
-                    return;
-                }
-
-                std::string gmName;
-                if (!GetGmNameForDiscordUser(event.command.usr.id, gmName))
-                {
-                    event.reply(dpp::message("You are not linked. Use in-game .discord link <secret>.").set_flags(dpp::m_ephemeral));
-                    return;
-                }
-
-                GmTicket* ticket = sTicketMgr->GetTicket(ticketId);
-                if (!ticket)
-                {
-                    event.reply(dpp::message("Ticket not found.").set_flags(dpp::m_ephemeral));
-                    return;
-                }
-
-                InsertInboxAction(event.command.usr.id, "whisper",
-                    ticket->GetPlayerName() + "|" + gmName + "|" + messageText);
-                event.reply(dpp::message("Reply queued.").set_flags(dpp::m_ephemeral));
-                return;
-            }
-
-            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_assign:", ticketId))
-            {
-                std::string gmName = Trim(GetModalValue(event.components, "gm_name"));
-                if (gmName.empty())
-                {
-                    event.reply(dpp::message("GM name is required.").set_flags(dpp::m_ephemeral));
-                    return;
-                }
-
-                InsertInboxAction(event.command.usr.id, "ticket_assign",
-                    Acore::StringFormat("{}|{}", ticketId, gmName));
-                event.reply(dpp::message("Ticket assignment queued.").set_flags(dpp::m_ephemeral));
-                return;
-            }
         });
 
         cluster->on_ready([=](const dpp::ready_t& event)
@@ -1165,15 +1067,34 @@ namespace GMDiscord
 
                         dpp::embed embed;
                         bool hasEmbed = false;
-                        if (eventType == "command_result")
-                            hasEmbed = BuildCommandResultEmbed(payload, embed);
-                        else if (eventType == "player_whisper" || eventType == "gm_whisper")
+						if (eventType == "command_result")
+						{
+							MarkOutboxDispatched(id);
+							continue;
+						}
+						else if (eventType == "player_whisper" || eventType == "gm_whisper")
                             hasEmbed = BuildWhisperEmbed(eventType, payload, embed);
                         else if (eventType.rfind("ticket_", 0) == 0)
                             hasEmbed = BuildTicketEmbed(eventType, payload, embed);
 
-                        if (_outboxChannelId)
-                        {
+						if (_outboxChannelId)
+						{
+							if (eventType == "player_whisper")
+							{
+								if (hasTicketId)
+								{
+									auto threadIt = _ticketThreadIds.find(ticketId);
+									if (threadIt != _ticketThreadIds.end())
+									{
+										if (hasEmbed)
+											clusterPtr->message_create(dpp::message(threadIt->second, "").add_embed(embed));
+										else
+											clusterPtr->message_create(dpp::message(threadIt->second, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload))));
+									}
+								}
+								continue;
+							}
+
                             bool createThread = (eventType == "ticket_create" && hasTicketId);
                             if (createThread)
                             {
@@ -1185,8 +1106,6 @@ namespace GMDiscord
                                 dpp::message outMessage = hasEmbed
                                     ? dpp::message(_outboxChannelId, "").add_embed(embed)
                                     : dpp::message(_outboxChannelId, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload)));
-                                for (dpp::component const& row : BuildTicketPanelComponents(ticketId))
-                                    outMessage.add_component(row);
 
                                 clusterPtr->message_create(outMessage, [this, clusterPtr, threadName, ticketId](const dpp::confirmation_callback_t& cb)
                                 {
@@ -1195,15 +1114,20 @@ namespace GMDiscord
 
                                     auto created = std::get<dpp::message>(cb.value);
                                     clusterPtr->thread_create_with_message(threadName, created.channel_id, created.id, 1440, 0,
-                                        [this, ticketId](const dpp::confirmation_callback_t& threadCb)
+                                        [this, clusterPtr, ticketId](const dpp::confirmation_callback_t& threadCb)
                                         {
                                             if (threadCb.is_error())
                                                 return;
 
-                                            auto createdThread = std::get<dpp::thread>(threadCb.value);
-                                            uint64_t threadId = static_cast<uint64_t>(createdThread.id);
-                                            _ticketThreadIds[ticketId] = threadId;
-                                            _threadTicketIds[threadId] = ticketId;
+                                        auto createdThread = std::get<dpp::thread>(threadCb.value);
+                                        uint64_t threadId = static_cast<uint64_t>(createdThread.id);
+                                        _ticketThreadIds[ticketId] = threadId;
+                                        _threadTicketIds[threadId] = ticketId;
+
+                                        dpp::message panelMessage(threadId, "GM Controls");
+                                        for (dpp::component const& row : BuildTicketPanelComponents(ticketId))
+                                            panelMessage.add_component(row);
+                                        clusterPtr->message_create(panelMessage);
                                         });
                                 });
                             }
