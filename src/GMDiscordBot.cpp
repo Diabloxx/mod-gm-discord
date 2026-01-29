@@ -24,8 +24,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <optional>
-#include <string_view>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -50,7 +49,7 @@ namespace GMDiscord
             return escaped;
         }
 
-        static std::string Trim(std::string_view value)
+        static std::string Trim(std::string const& value)
         {
             size_t start = 0;
             while (start < value.size() && std::isspace(static_cast<unsigned char>(value[start])))
@@ -63,14 +62,14 @@ namespace GMDiscord
             return std::string(value.substr(start, end - start));
         }
 
-        static std::string ToLower(std::string_view value)
+        static std::string ToLower(std::string const& value)
         {
             std::string out(value);
             std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return out;
         }
 
-        static std::vector<std::string> Split(std::string_view value, char delim)
+        static std::vector<std::string> Split(std::string const& value, char delim)
         {
             std::vector<std::string> out;
             std::string current;
@@ -102,7 +101,7 @@ namespace GMDiscord
             return text.substr(0, DISCORD_MESSAGE_LIMIT - 3) + "...";
         }
 
-        static std::unordered_map<uint64_t, std::unordered_set<std::string>> ParseRoleMappings(std::string_view value)
+        static std::unordered_map<uint64_t, std::unordered_set<std::string>> ParseRoleMappings(std::string const& value)
         {
             std::unordered_map<uint64_t, std::unordered_set<std::string>> out;
             for (std::string const& entry : Split(value, ';'))
@@ -134,7 +133,7 @@ namespace GMDiscord
             return out;
         }
 
-        static std::string GetCommandRoot(std::string_view command)
+        static std::string GetCommandRoot(std::string const& command)
         {
             std::string trimmed = Trim(command);
             if (trimmed.empty())
@@ -152,7 +151,7 @@ namespace GMDiscord
             return ToLower(root);
         }
 
-        static std::string GetCommandCategory(std::string_view root)
+        static std::string GetCommandCategory(std::string const& root)
         {
             std::string token = ToLower(root);
             if (token == "ticket" || token == "tickets")
@@ -193,7 +192,7 @@ namespace GMDiscord
             return false;
         }
 
-        static bool ExtractJsonBlock(std::string const& payload, std::string_view marker, std::string& out)
+        static bool ExtractJsonBlock(std::string const& payload, std::string const& marker, std::string& out)
         {
             size_t start = payload.find(marker);
             if (start == std::string::npos)
@@ -221,77 +220,95 @@ namespace GMDiscord
             return false;
         }
 
-        static std::optional<std::string> ExtractJsonString(std::string const& payload, std::string_view key)
+        static bool ExtractJsonString(std::string const& payload, std::string const& key, std::string& out)
         {
             std::string needle = Acore::StringFormat("\"{}\":\"", key);
             size_t pos = payload.find(needle);
             if (pos == std::string::npos)
-                return std::nullopt;
+                return false;
 
             pos += needle.size();
             size_t end = payload.find('"', pos);
             if (end == std::string::npos)
-                return std::nullopt;
+                return false;
 
-            return payload.substr(pos, end - pos);
+            out = payload.substr(pos, end - pos);
+            return true;
         }
 
-        static std::optional<std::string> ExtractJsonNumber(std::string const& payload, std::string_view key)
+        static bool ExtractJsonNumber(std::string const& payload, std::string const& key, std::string& out)
         {
             std::string needle = Acore::StringFormat("\"{}\":", key);
             size_t pos = payload.find(needle);
             if (pos == std::string::npos)
-                return std::nullopt;
+                return false;
 
             pos += needle.size();
             size_t end = payload.find_first_of(",}", pos);
             if (end == std::string::npos)
-                return std::nullopt;
+                return false;
 
-            return Trim(payload.substr(pos, end - pos));
+            out = Trim(payload.substr(pos, end - pos));
+            return !out.empty();
         }
 
-        static std::optional<uint32> ExtractJsonUint(std::string const& payload, std::string_view key)
+        static bool ExtractJsonUint(std::string const& payload, std::string const& key, uint32& out)
         {
-            auto number = ExtractJsonNumber(payload, key);
-            if (!number)
-                return std::nullopt;
+            std::string number;
+            if (!ExtractJsonNumber(payload, key, number))
+                return false;
 
             try
             {
-                return static_cast<uint32>(std::stoul(*number));
+                out = static_cast<uint32>(std::stoul(number));
+                return true;
             }
             catch (...)
             {
-                return std::nullopt;
+                return false;
             }
         }
 
-        static std::optional<dpp::embed> BuildTicketEmbed(std::string const& eventType, std::string const& payload)
+        static bool BuildTicketEmbed(std::string const& eventType, std::string const& payload, dpp::embed& embed)
         {
             std::string ticketBlock;
             if (!ExtractJsonBlock(payload, "\"ticket\":{", ticketBlock))
-                return std::nullopt;
+                return false;
 
-            auto id = ExtractJsonUint(ticketBlock, "id");
-            auto player = ExtractJsonString(ticketBlock, "player");
-            auto message = ExtractJsonString(ticketBlock, "message");
-            auto status = ExtractJsonString(ticketBlock, "status");
-            auto assignedTo = ExtractJsonString(ticketBlock, "assignedTo");
-            auto comment = ExtractJsonString(ticketBlock, "comment");
-            auto response = ExtractJsonString(ticketBlock, "response");
+            uint32 id = 0;
+            std::string player;
+            std::string message;
+            std::string status;
+            std::string assignedTo;
+            std::string comment;
+            std::string response;
 
-            dpp::embed embed;
-            embed.set_title(Acore::StringFormat("Ticket #{} - {}", id.value_or(0), player.value_or("unknown")));
-            embed.set_description(message.value_or(""));
+            ExtractJsonUint(ticketBlock, "id", id);
+            ExtractJsonString(ticketBlock, "player", player);
+            ExtractJsonString(ticketBlock, "message", message);
+            ExtractJsonString(ticketBlock, "status", status);
+            ExtractJsonString(ticketBlock, "assignedTo", assignedTo);
+            ExtractJsonString(ticketBlock, "comment", comment);
+            ExtractJsonString(ticketBlock, "response", response);
 
-            embed.add_field("Status", status.value_or("unknown"), true);
-            embed.add_field("Assigned", assignedTo.value_or("unassigned"), true);
+            if (player.empty())
+                player = "unknown";
+            if (status.empty())
+                status = "unknown";
+            if (assignedTo.empty())
+                assignedTo = "unassigned";
 
-            if (comment && !comment->empty())
-                embed.add_field("Comment", TruncateForDiscord(*comment), false);
-            if (response && !response->empty())
-                embed.add_field("Response", TruncateForDiscord(*response), false);
+            embed = dpp::embed();
+            embed.set_title(Acore::StringFormat("Ticket #{} - {}", id, player));
+            embed.set_description(message);
+
+            embed.add_field("Status", status, true);
+            embed.add_field("Assigned", assignedTo, true);
+
+            if (!comment.empty())
+                embed.add_field("Comment", TruncateForDiscord(comment), false);
+            if (!response.empty())
+                embed.add_field("Response", TruncateForDiscord(response), false);
 
             if (eventType == "ticket_close" || eventType == "ticket_resolve")
                 embed.set_color(0xFF5555);
@@ -300,46 +317,63 @@ namespace GMDiscord
             else
                 embed.set_color(0x2D9CDB);
 
-            return embed;
+            return true;
         }
 
-        static std::optional<dpp::embed> BuildWhisperEmbed(std::string const& eventType, std::string const& payload)
+        static bool BuildWhisperEmbed(std::string const& eventType, std::string const& payload, dpp::embed& embed)
         {
             std::string block;
             if (!ExtractJsonBlock(payload, "\"whisper\":{", block))
-                return std::nullopt;
+                return false;
 
-            auto player = ExtractJsonString(block, "player");
-            auto gmName = ExtractJsonString(block, "gmName");
-            auto message = ExtractJsonString(block, "message");
-            auto ticketId = ExtractJsonUint(block, "ticketId");
+            std::string player;
+            std::string gmName;
+            std::string message;
+            uint32 ticketId = 0;
 
-            dpp::embed embed;
+            ExtractJsonString(block, "player", player);
+            ExtractJsonString(block, "gmName", gmName);
+            ExtractJsonString(block, "message", message);
+            ExtractJsonUint(block, "ticketId", ticketId);
+
+            if (player.empty())
+                player = "unknown";
+            if (gmName.empty())
+                gmName = "unknown";
+
+            embed = dpp::embed();
             embed.set_title(eventType == "gm_whisper" ? "GM Reply" : "Player Reply");
-            embed.set_description(message.value_or(""));
-            embed.add_field("Player", player.value_or("unknown"), true);
-            embed.add_field("GM", gmName.value_or("unknown"), true);
-            embed.add_field("Ticket", Acore::StringFormat("{}", ticketId.value_or(0)), true);
+            embed.set_description(message);
+            embed.add_field("Player", player, true);
+            embed.add_field("GM", gmName, true);
+            embed.add_field("Ticket", Acore::StringFormat("{}", ticketId), true);
             embed.set_color(eventType == "gm_whisper" ? 0x6FCF97 : 0x9B51E0);
-            return embed;
+            return true;
         }
 
-        static std::optional<dpp::embed> BuildCommandResultEmbed(std::string const& payload)
+        static bool BuildCommandResultEmbed(std::string const& payload, dpp::embed& embed)
         {
             std::string block;
             if (!ExtractJsonBlock(payload, "\"command\":{", block))
-                return std::nullopt;
+                return false;
 
-            auto id = ExtractJsonUint(block, "id");
-            auto status = ExtractJsonString(block, "status");
-            auto output = ExtractJsonString(block, "output");
+            uint32 id = 0;
+            std::string status;
+            std::string output;
 
-            dpp::embed embed;
-            embed.set_title(Acore::StringFormat("Command Result #{}", id.value_or(0)));
-            embed.set_description(output.value_or(""));
-            embed.add_field("Status", status.value_or("unknown"), true);
-            embed.set_color(status.value_or("") == "ok" ? 0x6FCF97 : 0xEB5757);
-            return embed;
+            ExtractJsonUint(block, "id", id);
+            ExtractJsonString(block, "status", status);
+            ExtractJsonString(block, "output", output);
+
+            if (status.empty())
+                status = "unknown";
+
+            embed = dpp::embed();
+            embed.set_title(Acore::StringFormat("Command Result #{}", id));
+            embed.set_description(output);
+            embed.add_field("Status", status, true);
+            embed.set_color(status == "ok" ? 0x6FCF97 : 0xEB5757);
+            return true;
         }
 
         static std::string FormatTicketRoomName(std::string const& pattern, std::string const& player, uint32 ticketId)
@@ -371,16 +405,18 @@ namespace GMDiscord
             return ToLower(name);
         }
 
-        static std::optional<uint64_t> GetTicketRoomChannel(uint32 ticketId)
+        static bool GetTicketRoomChannel(uint32 ticketId, uint64_t& channelId)
         {
             QueryResult result = CharacterDatabase.Query(Acore::StringFormat(
                 "SELECT channel_id FROM gm_discord_ticket_room WHERE ticket_id={} LIMIT 1",
                 ticketId));
 
             if (!result)
-                return std::nullopt;
+                return false;
 
-            return (*result)[0].Get<uint64_t>();
+            Field* fields = result->Fetch();
+            channelId = fields[0].Get<uint64_t>();
+            return true;
         }
 
         static void UpsertTicketRoom(uint32 ticketId, uint64_t channelId, uint64_t guildId)
@@ -415,7 +451,8 @@ namespace GMDiscord
             if (!result)
                 return false;
 
-            gmName = (*result)[0].Get<std::string>();
+            Field* fields = result->Fetch();
+            gmName = fields[0].Get<std::string>();
             gmName = Trim(gmName);
             return !gmName.empty();
         }
@@ -551,46 +588,49 @@ namespace GMDiscord
                         std::string eventType = fields[1].Get<std::string>();
                         std::string payload = fields[2].Get<std::string>();
 
-                        std::optional<uint32> ticketId;
+                        uint32 ticketId = 0;
+                        bool hasTicketId = false;
                         if (eventType.rfind("ticket_", 0) == 0)
                         {
                             std::string ticketBlock;
                             if (ExtractJsonBlock(payload, "\"ticket\":{", ticketBlock))
-                                ticketId = ExtractJsonUint(ticketBlock, "id");
+                                hasTicketId = ExtractJsonUint(ticketBlock, "id", ticketId);
                         }
                         else if (eventType == "player_whisper" || eventType == "gm_whisper")
                         {
                             std::string whisperBlock;
                             if (ExtractJsonBlock(payload, "\"whisper\":{", whisperBlock))
-                                ticketId = ExtractJsonUint(whisperBlock, "ticketId");
+                                hasTicketId = ExtractJsonUint(whisperBlock, "ticketId", ticketId);
                         }
 
-                        std::optional<dpp::embed> embed;
+                        dpp::embed embed;
+                        bool hasEmbed = false;
                         if (eventType == "command_result")
-                            embed = BuildCommandResultEmbed(payload);
+                            hasEmbed = BuildCommandResultEmbed(payload, embed);
                         else if (eventType == "player_whisper" || eventType == "gm_whisper")
-                            embed = BuildWhisperEmbed(eventType, payload);
+                            hasEmbed = BuildWhisperEmbed(eventType, payload, embed);
                         else if (eventType.rfind("ticket_", 0) == 0)
-                            embed = BuildTicketEmbed(eventType, payload);
+                            hasEmbed = BuildTicketEmbed(eventType, payload, embed);
 
                         if (_outboxChannelId)
                         {
-                            if (embed)
-                                clusterPtr->message_create(dpp::message(_outboxChannelId, "").add_embed(*embed));
+                            if (hasEmbed)
+                                clusterPtr->message_create(dpp::message(_outboxChannelId, "").add_embed(embed));
                             else
                                 clusterPtr->message_create(dpp::message(_outboxChannelId, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload))));
                         }
 
-                        if (_ticketRoomsEnabled && ticketId && _ticketRoomCategoryId && _guildId)
+                        if (_ticketRoomsEnabled && hasTicketId && _ticketRoomCategoryId && _guildId)
                         {
                             uint64_t channelId = 0;
-                            if (auto existing = GetTicketRoomChannel(*ticketId))
-                                channelId = *existing;
+                            GetTicketRoomChannel(ticketId, channelId);
 
                             if (channelId == 0 && eventType == "ticket_create")
                             {
-                                auto playerName = ExtractJsonString(payload, "player").value_or("player");
-                                std::string channelName = FormatTicketRoomName(_ticketRoomNameFormat, playerName, *ticketId);
+                                std::string playerName;
+                                if (!ExtractJsonString(payload, "player", playerName))
+                                    playerName = "player";
+                                std::string channelName = FormatTicketRoomName(_ticketRoomNameFormat, playerName, ticketId);
 
                                 dpp::channel channel;
                                 channel.set_name(channelName);
@@ -600,8 +640,9 @@ namespace GMDiscord
                                 std::vector<dpp::permission_overwrite> overwrites;
 
                                 std::unordered_set<uint64_t> allowedRoles;
-                                for (auto const& [roleId, categories] : _roleCategoryMap)
-                                    allowedRoles.insert(roleId);
+                                for (std::unordered_map<uint64_t, std::unordered_set<std::string>>::const_iterator it = _roleCategoryMap.begin();
+                                    it != _roleCategoryMap.end(); ++it)
+                                    allowedRoles.insert(it->first);
 
                                 bool allowEveryone = allowedRoles.empty();
                                 if (!allowEveryone)
@@ -623,15 +664,15 @@ namespace GMDiscord
                                     if (!cb.is_error())
                                     {
                                         auto created = std::get<dpp::channel>(cb.value);
-                                        UpsertTicketRoom(*ticketId, static_cast<uint64_t>(created.id), _guildId);
+                                        UpsertTicketRoom(ticketId, static_cast<uint64_t>(created.id), _guildId);
                                     }
                                 });
                             }
 
                             if (channelId != 0 && _ticketRoomPostUpdates)
                             {
-                                if (embed)
-                                    clusterPtr->message_create(dpp::message(channelId, "").add_embed(*embed));
+                                if (hasEmbed)
+                                    clusterPtr->message_create(dpp::message(channelId, "").add_embed(embed));
                                 else
                                     clusterPtr->message_create(dpp::message(channelId, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload))));
                             }
@@ -644,13 +685,13 @@ namespace GMDiscord
                                 if (_ticketRoomArchiveCategoryId)
                                     ch.set_parent_id(_ticketRoomArchiveCategoryId);
 
-                                if (!embed)
+                                if (!hasEmbed)
                                 {
                                     clusterPtr->message_create(dpp::message(channelId, "Ticket closed."));
                                 }
 
                                 clusterPtr->channel_edit(ch);
-                                MarkTicketRoomArchived(*ticketId);
+                                MarkTicketRoomArchived(ticketId);
                             }
                         }
 

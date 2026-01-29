@@ -20,7 +20,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <string_view>
 #include <string>
 #include <thread>
 #include <unordered_map>
