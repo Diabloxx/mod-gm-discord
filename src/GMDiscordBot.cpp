@@ -19,6 +19,8 @@
 
 #include "Config.h"
 #include "DatabaseEnv.h"
+#include "Database/Field.h"
+#include "Database/QueryResult.h"
 #include "Log.h"
 #include "StringFormat.h"
 
@@ -646,18 +648,30 @@ namespace GMDiscord
 
                                 bool allowEveryone = allowedRoles.empty();
                                 if (!allowEveryone)
-                                    overwrites.emplace_back(dpp::permission_overwrite(_guildId, dpp::ot_role, 0, dpp::p_view_channel));
+                                {
+                                    dpp::permission_overwrite everyone;
+                                    everyone.id = _guildId;
+                                    everyone.type = dpp::ot_role;
+                                    everyone.allow = 0;
+                                    everyone.deny = dpp::p_view_channel;
+                                    overwrites.push_back(everyone);
+                                }
                                 else
+                                {
                                     allowedRoles.insert(_guildId);
+                                }
 
                                 for (uint64_t roleId : allowedRoles)
                                 {
-                                    overwrites.emplace_back(dpp::permission_overwrite(roleId, dpp::ot_role,
-                                        dpp::p_view_channel | dpp::p_send_messages | dpp::p_read_message_history,
-                                        0));
+                                    dpp::permission_overwrite roleOverwrite;
+                                    roleOverwrite.id = roleId;
+                                    roleOverwrite.type = dpp::ot_role;
+                                    roleOverwrite.allow = dpp::p_view_channel | dpp::p_send_messages | dpp::p_read_message_history;
+                                    roleOverwrite.deny = 0;
+                                    overwrites.push_back(roleOverwrite);
                                 }
 
-                                channel.set_permission_overwrites(overwrites);
+                                channel.permission_overwrites = overwrites;
 
                                 clusterPtr->channel_create(channel, [=](const dpp::confirmation_callback_t& cb)
                                 {
@@ -711,6 +725,7 @@ namespace GMDiscord
 
             uint64 discordUserId = event.command.usr.id;
             std::string name = event.command.get_command_name();
+            std::vector<dpp::snowflake> roles = event.command.member.get_roles();
 
             if (name == "gm-auth")
             {
@@ -724,7 +739,7 @@ namespace GMDiscord
             {
                 std::string cmd = std::get<std::string>(event.get_parameter("command"));
                 std::string category = GetCommandCategory(GetCommandRoot(cmd));
-                if (!HasRoleForCategory(_roleCategoryMap, event.command.member.roles, category))
+                if (!HasRoleForCategory(_roleCategoryMap, roles, category))
                 {
                     event.reply(dpp::message("You are not allowed to run this command category.").set_flags(dpp::m_ephemeral));
                     return;
@@ -740,7 +755,7 @@ namespace GMDiscord
                 std::string player = std::get<std::string>(event.get_parameter("player"));
                 std::string message = std::get<std::string>(event.get_parameter("message"));
 
-                if (!HasRoleForCategory(_roleCategoryMap, event.command.member.roles, "whisper"))
+                if (!HasRoleForCategory(_roleCategoryMap, roles, "whisper"))
                 {
                     event.reply(dpp::message("You are not allowed to send whispers.").set_flags(dpp::m_ephemeral));
                     return;
@@ -761,7 +776,7 @@ namespace GMDiscord
 
             if (name == "gm-ticket-assign")
             {
-                if (!HasRoleForCategory(_roleCategoryMap, event.command.member.roles, "ticket"))
+                if (!HasRoleForCategory(_roleCategoryMap, roles, "ticket"))
                 {
                     event.reply(dpp::message("You are not allowed to assign tickets.").set_flags(dpp::m_ephemeral));
                     return;
