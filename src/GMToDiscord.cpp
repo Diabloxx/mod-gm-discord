@@ -254,7 +254,7 @@ namespace GMDiscord
 		if (!g_Settings.rateLimitEnabled)
 			return true;
 
-		uint64 nowMs = GameTime::GetGameTime().count();
+		uint64 nowMs = GameTime::GetGameTimeMS().count();
 		uint64 windowMs = uint64(g_Settings.rateLimitWindowSeconds) * 1000;
 		auto& bucket = g_RateLimiter[discordUserId];
 		while (!bucket.empty() && nowMs - bucket.front() > windowMs)
