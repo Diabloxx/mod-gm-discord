@@ -23,6 +23,7 @@
 #include "Database/QueryResult.h"
 #include "Log.h"
 #include "StringFormat.h"
+#include "TicketMgr.h"
 
 #include <algorithm>
 #include <cctype>
@@ -231,6 +232,30 @@ namespace GMDiscord
             if (token == "debug")
                 return "debug";
             return "misc";
+        }
+
+        static bool TryParseTicketIdFromThreadName(std::string const& name, uint32& outTicketId)
+        {
+            outTicketId = 0;
+            constexpr char prefix[] = "ticket-";
+            if (name.rfind(prefix, 0) != 0)
+                return false;
+
+            size_t start = sizeof(prefix) - 1;
+            size_t end = name.find('-', start);
+            std::string idStr = (end == std::string::npos) ? name.substr(start) : name.substr(start, end - start);
+            if (idStr.empty())
+                return false;
+
+            try
+            {
+                outTicketId = static_cast<uint32>(std::stoul(idStr));
+                return outTicketId > 0;
+            }
+            catch (...)
+            {
+                return false;
+            }
         }
 
         static bool HasRoleForCategory(std::unordered_map<uint64_t, std::unordered_set<std::string>> const& roleMap,
@@ -762,10 +787,35 @@ namespace GMDiscord
 
                         if (_outboxChannelId)
                         {
-                            if (hasEmbed)
+                            bool createThread = (eventType == "ticket_create" && hasTicketId);
+                            if (createThread)
+                            {
+                                std::string playerName;
+                                if (!ExtractJsonString(payload, "player", playerName))
+                                    playerName = "player";
+
+                                std::string threadName = FormatTicketRoomName("ticket-{id}-{player}", playerName, ticketId);
+                                dpp::message outMessage = hasEmbed
+                                    ? dpp::message(_outboxChannelId, "").add_embed(embed)
+                                    : dpp::message(_outboxChannelId, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload)));
+
+                                clusterPtr->message_create(outMessage, [clusterPtr, threadName](const dpp::confirmation_callback_t& cb)
+                                {
+                                    if (cb.is_error())
+                                        return;
+
+                                    auto created = std::get<dpp::message>(cb.value);
+                                    clusterPtr->thread_create_with_message(threadName, created.channel_id, created.id, 1440, {});
+                                });
+                            }
+                            else if (hasEmbed)
+                            {
                                 clusterPtr->message_create(dpp::message(_outboxChannelId, "").add_embed(embed));
+                            }
                             else
+                            {
                                 clusterPtr->message_create(dpp::message(_outboxChannelId, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload))));
+                            }
                         }
 
                         if (_ticketRoomsEnabled && hasTicketId && _ticketRoomCategoryId && _guildId)
@@ -830,6 +880,7 @@ namespace GMDiscord
                                         UpsertTicketRoom(ticketId, static_cast<uint64_t>(created.id), _guildId);
                                     }
                                 });
+
                             }
 
                             if (channelId != 0 && _ticketRoomPostUpdates)
@@ -862,6 +913,56 @@ namespace GMDiscord
                     } while (result->NextRow());
                 }, 5);
             }
+        });
+
+        cluster->on_message_create([=](const dpp::message_create_t& event)
+        {
+            if (!_outboxChannelId)
+                return;
+
+            if (event.msg.author.is_bot())
+                return;
+
+            dpp::channel* channel = dpp::find_channel(event.msg.channel_id);
+            if (!channel)
+                return;
+
+            dpp::channel_type channelType = channel->get_type();
+            if (channelType != dpp::CHANNEL_PUBLIC_THREAD && channelType != dpp::CHANNEL_PRIVATE_THREAD && channelType != dpp::CHANNEL_ANNOUNCEMENT_THREAD)
+                return;
+
+            if (channel->parent_id != _outboxChannelId)
+                return;
+
+            uint32 ticketId = 0;
+            if (!TryParseTicketIdFromThreadName(channel->name, ticketId))
+                return;
+
+            GmTicket* ticket = sTicketMgr->GetTicket(ticketId);
+            if (!ticket || ticket->IsClosed())
+            {
+                auto* clusterPtr = static_cast<dpp::cluster*>(_cluster);
+                if (clusterPtr)
+                    clusterPtr->message_create(dpp::message(channel->id, "Ticket is closed or unavailable."));
+                return;
+            }
+
+            uint64 discordUserId = event.msg.author.id;
+            std::string gmName;
+            if (!GetGmNameForDiscordUser(discordUserId, gmName))
+            {
+                auto* clusterPtr = static_cast<dpp::cluster*>(_cluster);
+                if (clusterPtr)
+                    clusterPtr->message_create(dpp::message(channel->id, "You are not linked. Use in-game .discord link <secret>."));
+                return;
+            }
+
+            std::string content = Trim(event.msg.content);
+            if (content.empty())
+                return;
+
+            std::string payload = ticket->GetPlayerName() + "|" + gmName + "|" + content;
+            InsertInboxAction(discordUserId, "whisper", payload);
         });
 
         cluster->on_slashcommand([=](const dpp::slashcommand_t& event)
