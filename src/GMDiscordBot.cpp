@@ -806,7 +806,9 @@ namespace GMDiscord
                                         return;
 
                                     auto created = std::get<dpp::message>(cb.value);
-                                    _ticketThreadIds[ticketId] = static_cast<uint64_t>(created.id);
+                                    uint64_t threadId = static_cast<uint64_t>(created.id);
+                                    _ticketThreadIds[ticketId] = threadId;
+                                    _threadTicketIds[threadId] = ticketId;
                                     clusterPtr->thread_create_with_message(threadName, created.channel_id, created.id, 1440, {});
                                 });
                             }
@@ -903,6 +905,7 @@ namespace GMDiscord
                                     threadChannel.metadata.archived = true;
                                     threadChannel.metadata.locked = true;
                                     clusterPtr->thread_edit(threadChannel);
+                                    _threadTicketIds.erase(threadIt->second);
                                     _ticketThreadIds.erase(threadIt);
                                 }
 
@@ -938,27 +941,18 @@ namespace GMDiscord
             if (event.msg.author.is_bot())
                 return;
 
-            dpp::channel* channel = dpp::find_channel(event.msg.channel_id);
-            if (!channel)
+            auto threadIt = _threadTicketIds.find(static_cast<uint64_t>(event.msg.channel_id));
+            if (threadIt == _threadTicketIds.end())
                 return;
 
-            dpp::channel_type channelType = channel->get_type();
-            if (channelType != dpp::CHANNEL_PUBLIC_THREAD && channelType != dpp::CHANNEL_PRIVATE_THREAD && channelType != dpp::CHANNEL_ANNOUNCEMENT_THREAD)
-                return;
-
-            if (channel->parent_id != _outboxChannelId)
-                return;
-
-            uint32 ticketId = 0;
-            if (!TryParseTicketIdFromThreadName(channel->name, ticketId))
-                return;
+            uint32 ticketId = threadIt->second;
 
             GmTicket* ticket = sTicketMgr->GetTicket(ticketId);
             if (!ticket || ticket->IsClosed())
             {
                 auto* clusterPtr = static_cast<dpp::cluster*>(_cluster);
                 if (clusterPtr)
-                    clusterPtr->message_create(dpp::message(channel->id, "Ticket is closed or unavailable."));
+                    clusterPtr->message_create(dpp::message(event.msg.channel_id, "Ticket is closed or unavailable."));
                 return;
             }
 
@@ -968,7 +962,7 @@ namespace GMDiscord
             {
                 auto* clusterPtr = static_cast<dpp::cluster*>(_cluster);
                 if (clusterPtr)
-                    clusterPtr->message_create(dpp::message(channel->id, "You are not linked. Use in-game .discord link <secret>."));
+                    clusterPtr->message_create(dpp::message(event.msg.channel_id, "You are not linked. Use in-game .discord link <secret>."));
                 return;
             }
 

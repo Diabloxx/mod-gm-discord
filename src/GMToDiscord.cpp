@@ -19,6 +19,7 @@
 #include "Argon2.h"
 #include "BigNumber.h"
 #include "Chat.h"
+#include "CharacterCache.h"
 #include "CommandScript.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
@@ -372,8 +373,9 @@ namespace GMDiscord
 			return;
 
 		WorldPacket data;
+	ObjectGuid senderGuid = sCharacterCache->GetCharacterGuidByName(gmName);
 	ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_UNIVERSAL,
-		ObjectGuid::Empty, player->GetGUID(), message, CHAT_TAG_GM, gmName, player->GetName());
+		senderGuid, player->GetGUID(), message, CHAT_TAG_GM, gmName, player->GetName());
 		player->GetSession()->SendPacket(&data);
 	}
 
