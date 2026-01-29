@@ -343,6 +343,29 @@ namespace GMDiscord
 		return !playerName.empty() && !gmName.empty() && !message.empty();
 	}
 
+	static bool ParseTicketAssignPayload(std::string const& payload, uint32& ticketId, std::string& gmName)
+	{
+		size_t sep = payload.find('|');
+		if (sep == std::string::npos)
+			return false;
+
+		std::string idStr = Trim(payload.substr(0, sep));
+		gmName = Trim(payload.substr(sep + 1));
+		if (idStr.empty() || gmName.empty())
+			return false;
+
+		try
+		{
+			ticketId = static_cast<uint32>(std::stoul(idStr));
+		}
+		catch (...)
+		{
+			return false;
+		}
+
+		return ticketId > 0;
+	}
+
 	static void SendWhisperToPlayer(Player* player, std::string const& gmName, std::string const& message)
 	{
 		if (!player || !player->GetSession())
@@ -632,6 +655,55 @@ namespace GMDiscord
 				UpsertWhisperSession(player, discordUserId, gmName);
 				MarkInboxResult(id, "ok", "Whisper delivered");
 				LogAudit(discordUserId, accountId, action, "whisper", "ok", "Whisper delivered", payload);
+
+				uint32 ticketId = 0;
+				if (GmTicket* ticket = sTicketMgr->GetTicketByPlayer(player->GetGUID()))
+					ticketId = ticket->GetId();
+
+				std::string outPayload = Acore::StringFormat(
+					R"({"event":"gm_whisper","whisper":{"player":"{}","playerGuid":{},"gmName":"{}","discordUserId":{},"ticketId":{},"message":"{}"},"timestamp":{}})",
+					EscapeJson(player->GetName()),
+					player->GetGUID().GetRawValue(),
+					EscapeJson(gmName),
+					discordUserId,
+					ticketId,
+					EscapeJson(message),
+					GameTime::GetGameTime().count());
+				EnqueueOutbox("gm_whisper", outPayload);
+			}
+			else if (action == "ticket_assign")
+			{
+				uint32 accountId = 0;
+				bool verified = false;
+				if (!GetLinkedAccount(discordUserId, accountId, verified) || !verified)
+				{
+					MarkInboxResult(id, "not_verified", "Discord user is not verified");
+					LogAudit(discordUserId, accountId, action, "ticket", "not_verified", "Discord user is not verified", payload);
+					continue;
+				}
+
+				std::string category;
+				std::string reason;
+				if (!CheckCommandPermissions(".ticket assign", accountId, category, reason))
+				{
+					MarkInboxResult(id, "forbidden", reason);
+					LogAudit(discordUserId, accountId, action, "ticket", "forbidden", reason, payload);
+					continue;
+				}
+
+				uint32 ticketId = 0;
+				std::string gmName;
+				if (!ParseTicketAssignPayload(payload, ticketId, gmName))
+				{
+					MarkInboxResult(id, "invalid", "Invalid ticket assignment payload");
+					LogAudit(discordUserId, accountId, action, "ticket", "invalid", "Invalid ticket assignment payload", payload);
+					continue;
+				}
+
+				std::string command = Acore::StringFormat(".ticket assign {} {}", ticketId, gmName);
+				MarkInboxProcessing(id);
+				QueueCommand(id, discordUserId, accountId, command);
+				LogAudit(discordUserId, accountId, action, "ticket", "queued", "Ticket assignment queued", payload);
 			}
 			else
 			{

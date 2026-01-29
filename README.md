@@ -16,6 +16,10 @@ mod-gm-discord is an AzerothCore module that runs a Discord bot inside `worldser
 - Category-based permission checks per command group.
 - Audit log table for all Discord actions.
 - Rate limiting and spam protection for Discord actions.
+- Ticket room automation (auto create & archive).
+- Ticket assignment from Discord.
+- Ticket/whisper embeds.
+- Discord role-to-category mappings.
 - Ticket events emitted to Discord via outbox queue.
 - Whisper relay:
   - Discord → player: `/gm-whisper` sends a whisper as the GM name.
@@ -54,12 +58,14 @@ mod-gm-discord is an AzerothCore module that runs a Discord bot inside `worldser
 - `/gm-auth secret:<secret>`
 - `/gm-command command:<.command text>`
 - `/gm-whisper player:<name> message:<text>`
+- `/gm-ticket-assign ticket_id:<id> gm_name:<name>`
 
 ## Database Tables (Characters DB)
 - `gm_discord_link`
 - `gm_discord_inbox`
 - `gm_discord_outbox`
 - `gm_discord_audit`
+- `gm_discord_ticket_room`
 - `gm_discord_whisper_session`
 
 SQL is in:
@@ -76,6 +82,8 @@ Important keys:
 - `GMDiscord.Bot.Token`
 - `GMDiscord.Bot.GuildId`
 - `GMDiscord.Bot.OutboxChannelId`
+- `GMDiscord.Bot.TicketRooms.*`
+- `GMDiscord.Bot.RoleMappings`
 - `GMDiscord.CommandAllowAll`
 - `GMDiscord.CommandAllowList`
 - `GMDiscord.CommandCategory.*.MinSecurity`
@@ -84,6 +92,10 @@ Important keys:
 - `GMDiscord.Whisper.Enable`
 - `GMDiscord.RateLimit.*`
 - `GMDiscord.Audit.PayloadMax`
+
+Role mapping format:
+- `GMDiscord.Bot.RoleMappings = "roleId:ticket,tele;roleId2:whisper,ticket"`
+- Categories: `ticket`, `tele`, `gm`, `ban`, `account`, `character`, `lookup`, `server`, `debug`, `whisper`, `misc`
 
 ## Message Flow
 ### Link Flow
@@ -151,6 +163,20 @@ Payload shape:
   - `message`: string
 - `timestamp`: number
 
+### GM Whisper Messages
+Event: `gm_whisper`
+
+Payload shape:
+- `event`: string
+- `whisper`:
+  - `player`: string
+  - `playerGuid`: number
+  - `gmName`: string
+  - `discordUserId`: number
+  - `ticketId`: number
+  - `message`: string
+- `timestamp`: number
+
 ### Whisper Flow
 - `/gm-whisper` → inbox action `whisper` → server sends whisper.
 - Player reply (whisper to GM name) → outbox `player_whisper`.
@@ -163,10 +189,10 @@ Payload shape:
 - [x] Add rate limiting and spam protection for Discord commands.
 
 ### Medium Priority
-- [ ] Implement Discord channel ticket rooms (auto create & archive).
-- [ ] Add ticket assignment from Discord.
-- [ ] Add Discord embeds for tickets and GM replies.
-- [ ] Add configurable command groups / role mappings.
+- [x] Implement Discord channel ticket rooms (auto create & archive).
+- [x] Add ticket assignment from Discord.
+- [x] Add Discord embeds for tickets and GM replies.
+- [x] Add configurable command groups / role mappings.
 
 ### Long Term
 - [ ] Full GM panel in Discord (interaction‑driven, not text commands).

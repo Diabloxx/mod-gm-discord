@@ -19,6 +19,25 @@ GMDiscord.Bot.GuildId = 0
 # Channel ID where outbox events are posted. Set to 0 to disable posting.
 GMDiscord.Bot.OutboxChannelId = 0
 
+# Ticket room automation (per ticket Discord channel)
+# Requires GMDiscord.Bot.GuildId and a valid category ID.
+GMDiscord.Bot.TicketRooms.Enable = 0
+# Category where new ticket channels are created
+GMDiscord.Bot.TicketRooms.CategoryId = 0
+# Optional category where closed tickets are moved
+GMDiscord.Bot.TicketRooms.ArchiveCategoryId = 0
+# Channel naming format. Tokens: {id}, {player}
+GMDiscord.Bot.TicketRooms.NameFormat = ticket-{id}-{player}
+# Post ticket updates to the ticket room
+GMDiscord.Bot.TicketRooms.PostUpdates = 1
+# Move ticket room to archive category on close/resolve
+GMDiscord.Bot.TicketRooms.ArchiveOnClose = 1
+
+# Role/category mappings for Discord permissions (optional)
+# Format: roleId:cat1,cat2;roleId2:cat3
+# Categories: ticket, tele, gm, ban, account, character, lookup, server, debug, whisper, misc
+GMDiscord.Bot.RoleMappings = ""
+
 # Poll interval for reading commands from gm_discord_inbox (milliseconds).
 # Lower values reduce latency but increase DB load.
 GMDiscord.PollIntervalMs = 1000

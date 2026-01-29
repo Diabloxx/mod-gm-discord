@@ -60,6 +60,17 @@ CREATE TABLE `gm_discord_audit` (
   KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+DROP TABLE IF EXISTS `gm_discord_ticket_room`;
+CREATE TABLE `gm_discord_ticket_room` (
+  `ticket_id` INT UNSIGNED NOT NULL,
+  `channel_id` BIGINT UNSIGNED NOT NULL,
+  `guild_id` BIGINT UNSIGNED NOT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `archived_at` DATETIME NULL,
+  PRIMARY KEY (`ticket_id`),
+  UNIQUE KEY `uniq_channel_id` (`channel_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 DROP TABLE IF EXISTS `gm_discord_whisper_session`;
 CREATE TABLE `gm_discord_whisper_session` (
   `player_guid` BIGINT UNSIGNED NOT NULL,

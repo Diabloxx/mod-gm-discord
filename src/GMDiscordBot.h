@@ -20,8 +20,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string_view>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace GMDiscord
 {
@@ -45,6 +48,15 @@ namespace GMDiscord
         std::string _botToken;
         uint64_t _guildId = 0;
         uint64_t _outboxChannelId = 0;
+        bool _ticketRoomsEnabled = false;
+        uint64_t _ticketRoomCategoryId = 0;
+        uint64_t _ticketRoomArchiveCategoryId = 0;
+        std::string _ticketRoomNameFormat;
+        bool _ticketRoomPostUpdates = true;
+        bool _ticketRoomArchiveOnClose = true;
+        std::string _roleMappingsRaw;
+
+        std::unordered_map<uint64_t, std::unordered_set<std::string>> _roleCategoryMap;
 
         std::atomic_bool _running{false};
         std::thread _thread;
