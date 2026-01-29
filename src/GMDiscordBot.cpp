@@ -806,10 +806,17 @@ namespace GMDiscord
                                         return;
 
                                     auto created = std::get<dpp::message>(cb.value);
-                                    uint64_t threadId = static_cast<uint64_t>(created.id);
-                                    _ticketThreadIds[ticketId] = threadId;
-                                    _threadTicketIds[threadId] = ticketId;
-                                    clusterPtr->thread_create_with_message(threadName, created.channel_id, created.id, 1440, {});
+                                    clusterPtr->thread_create_with_message(threadName, created.channel_id, created.id, 1440, 0,
+                                        [this, ticketId](const dpp::confirmation_callback_t& threadCb)
+                                        {
+                                            if (threadCb.is_error())
+                                                return;
+
+                                            auto createdThread = std::get<dpp::thread>(threadCb.value);
+                                            uint64_t threadId = static_cast<uint64_t>(createdThread.id);
+                                            _ticketThreadIds[ticketId] = threadId;
+                                            _threadTicketIds[threadId] = ticketId;
+                                        });
                                 });
                             }
                             else if (hasEmbed)
@@ -902,6 +909,7 @@ namespace GMDiscord
                                 {
                                     dpp::thread threadChannel;
                                     threadChannel.id = threadIt->second;
+                                    threadChannel.metadata.auto_archive_duration = 1440;
                                     threadChannel.metadata.archived = true;
                                     threadChannel.metadata.locked = true;
                                     clusterPtr->thread_edit(threadChannel);
