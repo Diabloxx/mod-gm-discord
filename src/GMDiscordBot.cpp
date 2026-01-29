@@ -908,10 +908,14 @@ namespace GMDiscord
                     .set_max_length(1000)
                     .set_required(true);
 
-                dpp::interaction_modal_response modal(
-                    Acore::StringFormat("gm_ticket_close:{}", ticketId),
-                    "Close Ticket",
-                    { dpp::component().add_component(reasonInput) });
+				dpp::component reasonRow;
+				reasonRow.set_type(dpp::cot_action_row);
+				reasonRow.add_component(reasonInput);
+
+				dpp::interaction_modal_response modal;
+				modal.set_custom_id(Acore::StringFormat("gm_ticket_close:{}", ticketId));
+				modal.set_title("Close Ticket");
+				modal.add_component(reasonRow);
                 event.dialog(modal);
                 return;
             }
@@ -1092,6 +1096,7 @@ namespace GMDiscord
 											clusterPtr->message_create(dpp::message(threadIt->second, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload))));
 									}
 								}
+								MarkOutboxDispatched(id);
 								continue;
 							}
 
