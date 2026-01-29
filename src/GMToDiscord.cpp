@@ -372,8 +372,8 @@ namespace GMDiscord
 			return;
 
 		WorldPacket data;
-		ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_UNIVERSAL,
-			ObjectGuid::Empty, player->GetGUID(), message, 0, gmName, player->GetName());
+	ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_UNIVERSAL,
+		ObjectGuid::Empty, player->GetGUID(), message, CHAT_TAG_GM, gmName, player->GetName());
 		player->GetSession()->SendPacket(&data);
 	}
 

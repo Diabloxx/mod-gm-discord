@@ -694,6 +694,7 @@ namespace GMDiscord
         }
 
         auto* cluster = new dpp::cluster(_botToken);
+        cluster->intents = dpp::i_default_intents | dpp::i_message_content;
         _cluster = cluster;
         cluster->on_log([=](const dpp::log_t& event)
         {
@@ -799,12 +800,13 @@ namespace GMDiscord
                                     ? dpp::message(_outboxChannelId, "").add_embed(embed)
                                     : dpp::message(_outboxChannelId, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload)));
 
-                                clusterPtr->message_create(outMessage, [clusterPtr, threadName](const dpp::confirmation_callback_t& cb)
+                                clusterPtr->message_create(outMessage, [this, clusterPtr, threadName, ticketId](const dpp::confirmation_callback_t& cb)
                                 {
                                     if (cb.is_error())
                                         return;
 
                                     auto created = std::get<dpp::message>(cb.value);
+                                    _ticketThreadIds[ticketId] = static_cast<uint64_t>(created.id);
                                     clusterPtr->thread_create_with_message(threadName, created.channel_id, created.id, 1440, {});
                                 });
                             }
@@ -891,9 +893,22 @@ namespace GMDiscord
                                     clusterPtr->message_create(dpp::message(channelId, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload))));
                             }
 
-                            if (channelId != 0 && _ticketRoomArchiveOnClose &&
-                                (eventType == "ticket_close" || eventType == "ticket_resolve"))
+                            if (eventType == "ticket_close" || eventType == "ticket_resolve")
                             {
+                                auto threadIt = _ticketThreadIds.find(ticketId);
+                                if (threadIt != _ticketThreadIds.end())
+                                {
+                                    dpp::thread threadChannel;
+                                    threadChannel.id = threadIt->second;
+                                    threadChannel.metadata.archived = true;
+                                    threadChannel.metadata.locked = true;
+                                    clusterPtr->thread_edit(threadChannel);
+                                    _ticketThreadIds.erase(threadIt);
+                                }
+
+                                if (!_ticketRoomArchiveOnClose)
+                                    continue;
+
                                 dpp::channel ch;
                                 ch.id = channelId;
                                 if (_ticketRoomArchiveCategoryId)
