@@ -661,17 +661,6 @@ namespace GMDiscord
 				uint32 ticketId = 0;
 				if (GmTicket* ticket = sTicketMgr->GetTicketByPlayer(player->GetGUID()))
 					ticketId = ticket->GetId();
-
-				std::string outPayload = Acore::StringFormat(
-					R"({{"event":"gm_whisper","whisper":{{"player":"{}","playerGuid":{},"gmName":"{}","discordUserId":{},"ticketId":{},"message":"{}"}},"timestamp":{}}})",
-					EscapeJson(player->GetName()),
-					player->GetGUID().GetRawValue(),
-					EscapeJson(gmName),
-					discordUserId,
-					ticketId,
-					EscapeJson(message),
-					GameTime::GetGameTime().count());
-				EnqueueOutbox("gm_whisper", outPayload);
 			}
 			else if (action == "ticket_assign")
 			{
@@ -966,16 +955,7 @@ public:
 		if (GmTicket* ticket = sTicketMgr->GetTicketByPlayer(player->GetGUID()))
 			ticketId = ticket->GetId();
 
-		std::string payload = Acore::StringFormat(
-			R"({{"event":"player_whisper","whisper":{{"player":"{}","playerGuid":{},"gmName":"{}","discordUserId":{},"ticketId":{},"message":"{}"}},"timestamp":{}}})",
-			GMDiscord::EscapeJson(player->GetName()),
-			player->GetGUID().GetRawValue(),
-			GMDiscord::EscapeJson(receiverName),
-			discordUserId,
-			ticketId,
-			GMDiscord::EscapeJson(msg),
-			GameTime::GetGameTime().count());
-		GMDiscord::EnqueueOutbox("player_whisper", payload);
+		// ...existing code...
 
 		return false; // handled, prevent "player not found"
 	}
