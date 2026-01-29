@@ -105,3 +105,9 @@ GMDiscord.Outbox.Enable = 1
 # Whisper relay (Discord -> player and player -> Discord)
 # Requires verified link + sufficient security level.
 GMDiscord.Whisper.Enable = 1
+
+# Default message sent to the player when a ticket is created.
+# Leave empty to disable.
+GMDiscord.Ticket.CreateWhisperMessage = "Thank you for your ticket. A GM will contact you soon."
+# Sender name shown in the whisper (non-character).
+GMDiscord.Ticket.CreateWhisperSender = "Customer Support"

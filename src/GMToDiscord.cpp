@@ -64,6 +64,8 @@ namespace GMDiscord
 		uint32 rateLimitMaxActions = 5;
 		uint32 rateLimitMinIntervalMs = 500;
 		uint32 auditPayloadMax = 1024;
+		std::string ticketCreateWhisperMessage;
+		std::string ticketCreateWhisperSender;
 		std::vector<std::string> commandAllowList;
 		std::unordered_map<std::string, uint32> categoryMinSecurity;
 	};
@@ -160,6 +162,12 @@ namespace GMDiscord
 		g_Settings.rateLimitMaxActions = sConfigMgr->GetOption<uint32>("GMDiscord.RateLimit.MaxActions", 5);
 		g_Settings.rateLimitMinIntervalMs = sConfigMgr->GetOption<uint32>("GMDiscord.RateLimit.MinIntervalMs", 500);
 		g_Settings.auditPayloadMax = sConfigMgr->GetOption<uint32>("GMDiscord.Audit.PayloadMax", 1024);
+		g_Settings.ticketCreateWhisperMessage = sConfigMgr->GetOption<std::string>(
+			"GMDiscord.Ticket.CreateWhisperMessage",
+			"Thank you for your ticket. A GM will contact you soon.");
+		g_Settings.ticketCreateWhisperSender = sConfigMgr->GetOption<std::string>(
+			"GMDiscord.Ticket.CreateWhisperSender",
+			"Customer Support");
 
 		std::string allowList = sConfigMgr->GetOption<std::string>("GMDiscord.CommandAllowList", ".ticket;.gm");
 		g_Settings.commandAllowList = SplitAllowList(allowList);
@@ -401,9 +409,20 @@ namespace GMDiscord
 			return;
 
 		WorldPacket data;
-	ObjectGuid senderGuid = sCharacterCache->GetCharacterGuidByName(gmName);
-	ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_UNIVERSAL,
-		senderGuid, player->GetGUID(), message, CHAT_TAG_GM, gmName, player->GetName());
+		ObjectGuid senderGuid = sCharacterCache->GetCharacterGuidByName(gmName);
+		ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_UNIVERSAL,
+			senderGuid, player->GetGUID(), message, CHAT_TAG_GM, gmName, player->GetName());
+		player->GetSession()->SendPacket(&data);
+	}
+
+	static void SendSupportWhisperToPlayer(Player* player, std::string const& senderName, std::string const& message)
+	{
+		if (!player || !player->GetSession())
+			return;
+
+		WorldPacket data;
+		ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_WHISPER, LANG_UNIVERSAL,
+			ObjectGuid::Empty, player->GetGUID(), message, CHAT_TAG_NONE, senderName, player->GetName());
 		player->GetSession()->SendPacket(&data);
 	}
 
@@ -828,6 +847,18 @@ public:
 	void OnTicketCreate(GmTicket* ticket) override
 	{
 		GMDiscord::EnqueueOutbox("ticket_create", GMDiscord::BuildTicketPayload(ticket, "ticket_create"));
+		if (!ticket)
+			return;
+
+		if (GMDiscord::g_Settings.ticketCreateWhisperMessage.empty())
+			return;
+
+		Player* player = ObjectAccessor::FindPlayerByName(ticket->GetPlayerName(), false);
+		if (!player)
+			return;
+
+		GMDiscord::SendSupportWhisperToPlayer(player, GMDiscord::g_Settings.ticketCreateWhisperSender,
+			GMDiscord::g_Settings.ticketCreateWhisperMessage);
 	}
 
 	void OnTicketUpdateLastChange(GmTicket* ticket) override
