@@ -97,6 +97,28 @@ Role mapping format:
 - `GMDiscord.Bot.RoleMappings = "roleId:ticket,tele;roleId2:whisper,ticket"`
 - Categories: `ticket`, `tele`, `gm`, `ban`, `account`, `character`, `lookup`, `server`, `debug`, `whisper`, `misc`
 
+## DPP (Discord) Setup
+
+This module requires DPP (D++) and expects the headers/libraries to be available to the build.
+
+### vcpkg (recommended)
+
+1. Install vcpkg:
+   ```powershell
+   git clone https://github.com/microsoft/vcpkg.git
+   cd vcpkg
+   .\bootstrap-vcpkg.bat
+   .\vcpkg integrate install
+   ```
+2. Install DPP:
+   ```powershell
+   .\vcpkg install dpp:x64-windows
+   ```
+3. Configure your build to use the vcpkg toolchain file (CMake builds):
+   ```powershell
+   -DCMAKE_TOOLCHAIN_FILE=<path-to-vcpkg>\scripts\buildsystems\vcpkg.cmake
+   ```
+
 ## Message Flow
 ### Link Flow
 1. GM runs `.discord link <secret>` in game.
@@ -195,9 +217,9 @@ Payload shape:
 - [x] Add configurable command groups / role mappings.
 
 ### Long Term
-- [ ] Full GM panel in Discord (interaction‑driven, not text commands).
+- [x] Full GM panel in Discord (interaction‑driven, not text commands).
 - [ ] Fine‑grained permissions per Discord role and GM account level.
-- [ ] Rich player context (location, class, level) in ticket views.
+- [x] Rich player context (location, class, level) in ticket views.
 - [ ] Multi‑realm support & sharding.
 
 ## Notes
