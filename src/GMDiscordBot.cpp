@@ -72,6 +72,19 @@ namespace GMDiscord
             return out;
         }
 
+        static std::string SanitizeWhisperName(std::string const& value)
+        {
+            std::string out;
+            out.reserve(value.size());
+            for (char ch : value)
+            {
+                if (std::isalnum(static_cast<unsigned char>(ch)))
+                    out.push_back(ch);
+            }
+
+            return out;
+        }
+
         static std::vector<std::string> Split(std::string const& value, char delim)
         {
             std::vector<std::string> out;
@@ -974,11 +987,18 @@ namespace GMDiscord
                 return;
             }
 
+            std::string displayName = event.msg.member.get_nickname();
+            if (displayName.empty())
+                displayName = event.msg.author.username;
+            displayName = SanitizeWhisperName(displayName);
+            if (displayName.empty())
+                displayName = gmName;
+
             std::string content = Trim(event.msg.content);
             if (content.empty())
                 return;
 
-            std::string payload = ticket->GetPlayerName() + "|" + gmName + "|" + content;
+            std::string payload = ticket->GetPlayerName() + "|" + displayName + "|" + content;
             InsertInboxAction(discordUserId, "whisper", payload);
         });
 
