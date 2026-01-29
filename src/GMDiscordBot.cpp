@@ -22,6 +22,7 @@
 #include "Database/Field.h"
 #include "Database/QueryResult.h"
 #include "Log.h"
+#include "SharedDefines.h"
 #include "StringFormat.h"
 #include "TicketMgr.h"
 
@@ -30,6 +31,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 #if __has_include(<dpp/dpp.h>)
@@ -52,6 +54,26 @@ namespace GMDiscord
             return escaped;
         }
 
+        static std::string EscapeJson(std::string const& input)
+        {
+            std::string out;
+            out.reserve(input.size() + 8);
+            for (char ch : input)
+            {
+                switch (ch)
+                {
+                    case '\\': out += "\\\\"; break;
+                    case '"': out += "\\\""; break;
+                    case '\n': out += "\\n"; break;
+                    case '\r': out += "\\r"; break;
+                    case '\t': out += "\\t"; break;
+                    default: out += ch; break;
+                }
+            }
+
+            return out;
+        }
+
         static std::string Trim(std::string const& value)
         {
             size_t start = 0;
@@ -70,6 +92,101 @@ namespace GMDiscord
             std::string out(value);
             std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return out;
+        }
+
+        static std::string GetClassName(uint32 classId)
+        {
+            switch (classId)
+            {
+                case CLASS_WARRIOR: return "Warrior";
+                case CLASS_PALADIN: return "Paladin";
+                case CLASS_HUNTER: return "Hunter";
+                case CLASS_ROGUE: return "Rogue";
+                case CLASS_PRIEST: return "Priest";
+                case CLASS_DEATH_KNIGHT: return "Death Knight";
+                case CLASS_SHAMAN: return "Shaman";
+                case CLASS_MAGE: return "Mage";
+                case CLASS_WARLOCK: return "Warlock";
+                case CLASS_DRUID: return "Druid";
+                default: return "Unknown";
+            }
+        }
+
+        static bool TryGetCharacterContext(std::string const& playerName, uint32& level, uint32& classId)
+        {
+            std::string playerEsc = EscapeSql(playerName);
+            QueryResult result = CharacterDatabase.Query(Acore::StringFormat(
+                "SELECT level, class FROM characters WHERE name='{}' LIMIT 1",
+                playerEsc));
+
+            if (!result)
+                return false;
+
+            Field* fields = result->Fetch();
+            level = fields[0].Get<uint32>();
+            classId = fields[1].Get<uint8>();
+            return true;
+        }
+
+        static std::vector<dpp::component> BuildTicketPanelComponents(uint32 ticketId)
+        {
+            std::vector<dpp::component> rows;
+
+            dpp::component row1;
+            row1.add_component(dpp::component().set_label("Claim").set_style(dpp::cos_primary)
+                .set_id(Acore::StringFormat("gm_ticket_claim:{}", ticketId)));
+            row1.add_component(dpp::component().set_label("Reply").set_style(dpp::cos_secondary)
+                .set_id(Acore::StringFormat("gm_ticket_reply:{}", ticketId)));
+            row1.add_component(dpp::component().set_label("Close").set_style(dpp::cos_danger)
+                .set_id(Acore::StringFormat("gm_ticket_close:{}", ticketId)));
+            rows.push_back(row1);
+
+            dpp::component row2;
+            row2.add_component(dpp::component().set_label("Assign").set_style(dpp::cos_primary)
+                .set_id(Acore::StringFormat("gm_ticket_assign:{}", ticketId)));
+            row2.add_component(dpp::component().set_label("Details").set_style(dpp::cos_secondary)
+                .set_id(Acore::StringFormat("gm_ticket_details:{}", ticketId)));
+            rows.push_back(row2);
+
+            return rows;
+        }
+
+        static bool TryParsePanelTicketId(std::string const& customId, std::string const& prefix, uint32& outTicketId)
+        {
+            if (customId.rfind(prefix, 0) != 0)
+                return false;
+
+            std::string idStr = customId.substr(prefix.size());
+            if (idStr.empty())
+                return false;
+
+            try
+            {
+                outTicketId = static_cast<uint32>(std::stoul(idStr));
+                return outTicketId > 0;
+            }
+            catch (...)
+            {
+                return false;
+            }
+        }
+
+        static std::string GetModalValue(std::vector<dpp::component> const& components, std::string const& id)
+        {
+            for (dpp::component const& row : components)
+            {
+                for (dpp::component const& child : row.components)
+                {
+                    if (child.custom_id == id)
+                    {
+                        if (std::holds_alternative<std::string>(child.value))
+                            return std::get<std::string>(child.value);
+                        return {};
+                    }
+                }
+            }
+
+            return {};
         }
 
         static std::string SanitizeWhisperName(std::string const& value)
@@ -437,6 +554,23 @@ namespace GMDiscord
             return !out.empty();
         }
 
+        static bool ExtractJsonFloat(std::string const& payload, std::string const& key, float& out)
+        {
+            std::string number;
+            if (!ExtractJsonNumber(payload, key, number))
+                return false;
+
+            try
+            {
+                out = std::stof(number);
+                return true;
+            }
+            catch (...)
+            {
+                return false;
+            }
+        }
+
         static bool ExtractJsonUint(std::string const& payload, std::string const& key, uint32& out)
         {
             std::string number;
@@ -489,6 +623,28 @@ namespace GMDiscord
 
             embed.add_field("Status", status, true);
             embed.add_field("Assigned", assignedTo, true);
+
+            uint32 level = 0;
+            uint32 classId = 0;
+            if (TryGetCharacterContext(player, level, classId))
+            {
+                embed.add_field("Level", Acore::StringFormat("{}", level), true);
+                embed.add_field("Class", GetClassName(classId), true);
+            }
+
+            std::string locationBlock;
+            uint32 mapId = 0;
+            float posX = 0.0f;
+            float posY = 0.0f;
+            float posZ = 0.0f;
+            if (ExtractJsonBlock(ticketBlock, "location", locationBlock) &&
+                ExtractJsonUint(locationBlock, "mapId", mapId) &&
+                ExtractJsonFloat(locationBlock, "x", posX) &&
+                ExtractJsonFloat(locationBlock, "y", posY) &&
+                ExtractJsonFloat(locationBlock, "z", posZ))
+            {
+                embed.add_field("Location", Acore::StringFormat("Map {} ({:.2f}, {:.2f}, {:.2f})", mapId, posX, posY, posZ), false);
+            }
 
             if (!comment.empty())
                 embed.add_field("Comment", TruncateForDiscord(comment), false);
@@ -714,6 +870,223 @@ namespace GMDiscord
             LOG_INFO("module.gm_discord", "DPP: {}", EscapeFmtBraces(event.message));
         });
 
+        cluster->on_button_click([=](const dpp::button_click_t& event)
+        {
+            if (_guildId && event.command.guild_id != _guildId)
+            {
+                event.reply(dpp::message("This bot is not enabled in this guild.").set_flags(dpp::m_ephemeral));
+                return;
+            }
+
+            uint32 ticketId = 0;
+            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_claim:", ticketId))
+            {
+                if (!HasRoleForCategory(_roleCategoryMap, event.command.member.get_roles(), "ticket"))
+                {
+                    event.reply(dpp::message("You are not allowed to claim tickets.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                std::string gmName;
+                if (!GetGmNameForDiscordUser(event.command.usr.id, gmName))
+                {
+                    event.reply(dpp::message("You are not linked. Use in-game .discord link <secret>.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                InsertInboxAction(event.command.usr.id, "ticket_assign", Acore::StringFormat("{}|{}", ticketId, gmName));
+                event.reply(dpp::message("Ticket claim queued.").set_flags(dpp::m_ephemeral));
+                return;
+            }
+
+            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_close:", ticketId))
+            {
+                if (!HasRoleForCategory(_roleCategoryMap, event.command.member.get_roles(), "ticket"))
+                {
+                    event.reply(dpp::message("You are not allowed to close tickets.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                dpp::component reasonInput;
+                reasonInput.set_label("Close reason")
+                    .set_id("reason")
+                    .set_text_style(dpp::text_paragraph)
+                    .set_min_length(1)
+                    .set_max_length(1000)
+                    .set_required(true);
+
+                dpp::interaction_modal_response modal(
+                    Acore::StringFormat("gm_ticket_close:{}", ticketId),
+                    "Close Ticket",
+                    { dpp::component().add_component(reasonInput) });
+                event.dialog(modal);
+                return;
+            }
+
+            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_reply:", ticketId))
+            {
+                if (!HasRoleForCategory(_roleCategoryMap, event.command.member.get_roles(), "whisper"))
+                {
+                    event.reply(dpp::message("You are not allowed to reply to tickets.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                dpp::component replyInput;
+                replyInput.set_label("Reply message")
+                    .set_id("message")
+                    .set_text_style(dpp::text_paragraph)
+                    .set_min_length(1)
+                    .set_max_length(1000)
+                    .set_required(true);
+
+                dpp::interaction_modal_response modal(
+                    Acore::StringFormat("gm_ticket_reply:{}", ticketId),
+                    "Reply to Ticket",
+                    { dpp::component().add_component(replyInput) });
+                event.dialog(modal);
+                return;
+            }
+
+            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_assign:", ticketId))
+            {
+                if (!HasRoleForCategory(_roleCategoryMap, event.command.member.get_roles(), "ticket"))
+                {
+                    event.reply(dpp::message("You are not allowed to assign tickets.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                dpp::component gmInput;
+                gmInput.set_label("GM character name")
+                    .set_id("gm_name")
+                    .set_text_style(dpp::text_short)
+                    .set_min_length(1)
+                    .set_max_length(32)
+                    .set_required(true);
+
+                dpp::interaction_modal_response modal(
+                    Acore::StringFormat("gm_ticket_assign:{}", ticketId),
+                    "Assign Ticket",
+                    { dpp::component().add_component(gmInput) });
+                event.dialog(modal);
+                return;
+            }
+
+            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_details:", ticketId))
+            {
+                if (!HasRoleForCategory(_roleCategoryMap, event.command.member.get_roles(), "ticket"))
+                {
+                    event.reply(dpp::message("You are not allowed to view ticket details.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                GmTicket* ticket = sTicketMgr->GetTicket(ticketId);
+                if (!ticket)
+                {
+                    event.reply(dpp::message("Ticket not found.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                dpp::embed embed;
+                std::string payload = Acore::StringFormat(
+                    R"({{"ticket":{{"id":{},"player":"{}","message":"{}","comment":"{}","response":"{}","assignedTo":"{}","status":"{}","location":{{"mapId":{},"x":{},"y":{},"z":{}}}}}}})",
+                    ticket->GetId(),
+                    EscapeJson(ticket->GetPlayerName()),
+                    EscapeJson(ticket->GetMessage()),
+                    EscapeJson(ticket->GetComment()),
+                    EscapeJson(ticket->GetResponseText()),
+                    EscapeJson(ticket->GetAssignedToName()),
+                    ticket->IsClosed() ? "closed" : (ticket->IsCompleted() ? "completed" : "open"),
+                    ticket->GetMapId(),
+                    ticket->GetPositionX(),
+                    ticket->GetPositionY(),
+                    ticket->GetPositionZ());
+                if (!BuildTicketEmbed("ticket_update", payload, embed))
+                {
+                    event.reply(dpp::message("Failed to build ticket details.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                event.reply(dpp::message().add_embed(embed).set_flags(dpp::m_ephemeral));
+                return;
+            }
+        });
+
+        cluster->on_form_submit([=](const dpp::form_submit_t& event)
+        {
+            if (_guildId && event.command.guild_id != _guildId)
+            {
+                event.reply(dpp::message("This bot is not enabled in this guild.").set_flags(dpp::m_ephemeral));
+                return;
+            }
+
+            uint32 ticketId = 0;
+            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_close:", ticketId))
+            {
+                std::string reason = Trim(GetModalValue(event.components, "reason"));
+                if (reason.empty())
+                {
+                    event.reply(dpp::message("Close reason is required.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                std::string gmName;
+                if (!GetGmNameForDiscordUser(event.command.usr.id, gmName))
+                {
+                    event.reply(dpp::message("You are not linked. Use in-game .discord link <secret>.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                InsertInboxAction(event.command.usr.id, "ticket_close",
+                    Acore::StringFormat("{}|{}|{}", ticketId, gmName, reason));
+                event.reply(dpp::message("Ticket close queued.").set_flags(dpp::m_ephemeral));
+                return;
+            }
+
+            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_reply:", ticketId))
+            {
+                std::string messageText = Trim(GetModalValue(event.components, "message"));
+                if (messageText.empty())
+                {
+                    event.reply(dpp::message("Reply message is required.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                std::string gmName;
+                if (!GetGmNameForDiscordUser(event.command.usr.id, gmName))
+                {
+                    event.reply(dpp::message("You are not linked. Use in-game .discord link <secret>.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                GmTicket* ticket = sTicketMgr->GetTicket(ticketId);
+                if (!ticket)
+                {
+                    event.reply(dpp::message("Ticket not found.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                InsertInboxAction(event.command.usr.id, "whisper",
+                    ticket->GetPlayerName() + "|" + gmName + "|" + messageText);
+                event.reply(dpp::message("Reply queued.").set_flags(dpp::m_ephemeral));
+                return;
+            }
+
+            if (TryParsePanelTicketId(event.custom_id, "gm_ticket_assign:", ticketId))
+            {
+                std::string gmName = Trim(GetModalValue(event.components, "gm_name"));
+                if (gmName.empty())
+                {
+                    event.reply(dpp::message("GM name is required.").set_flags(dpp::m_ephemeral));
+                    return;
+                }
+
+                InsertInboxAction(event.command.usr.id, "ticket_assign",
+                    Acore::StringFormat("{}|{}", ticketId, gmName));
+                event.reply(dpp::message("Ticket assignment queued.").set_flags(dpp::m_ephemeral));
+                return;
+            }
+        });
+
         cluster->on_ready([=](const dpp::ready_t& event)
         {
             if (dpp::run_once<struct gm_discord_ready>())
@@ -812,6 +1185,8 @@ namespace GMDiscord
                                 dpp::message outMessage = hasEmbed
                                     ? dpp::message(_outboxChannelId, "").add_embed(embed)
                                     : dpp::message(_outboxChannelId, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload)));
+                                for (dpp::component const& row : BuildTicketPanelComponents(ticketId))
+                                    outMessage.add_component(row);
 
                                 clusterPtr->message_create(outMessage, [this, clusterPtr, threadName, ticketId](const dpp::confirmation_callback_t& cb)
                                 {

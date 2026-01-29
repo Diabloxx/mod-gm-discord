@@ -26,6 +26,7 @@
 #include "GMDiscordBot.h"
 #include "GameTime.h"
 #include "Log.h"
+#include "Mail.h"
 #include "ObjectAccessor.h"
 #include "Random.h"
 #include "ScriptMgr.h"
@@ -353,6 +354,33 @@ namespace GMDiscord
 		std::string idStr = Trim(payload.substr(0, sep));
 		gmName = Trim(payload.substr(sep + 1));
 		if (idStr.empty() || gmName.empty())
+			return false;
+
+		try
+		{
+			ticketId = static_cast<uint32>(std::stoul(idStr));
+		}
+		catch (...)
+		{
+			return false;
+		}
+
+		return ticketId > 0;
+	}
+
+	static bool ParseTicketClosePayload(std::string const& payload, uint32& ticketId, std::string& gmName, std::string& reason)
+	{
+		size_t first = payload.find('|');
+		if (first == std::string::npos)
+			return false;
+		size_t second = payload.find('|', first + 1);
+		if (second == std::string::npos)
+			return false;
+
+		std::string idStr = Trim(payload.substr(0, first));
+		gmName = Trim(payload.substr(first + 1, second - first - 1));
+		reason = Trim(payload.substr(second + 1));
+		if (idStr.empty() || gmName.empty() || reason.empty())
 			return false;
 
 		try
@@ -695,6 +723,60 @@ namespace GMDiscord
 				MarkInboxProcessing(id);
 				QueueCommand(id, discordUserId, accountId, command);
 				LogAudit(discordUserId, accountId, action, "ticket", "queued", "Ticket assignment queued", payload);
+			}
+			else if (action == "ticket_close")
+			{
+				uint32 accountId = 0;
+				bool verified = false;
+				if (!GetLinkedAccount(discordUserId, accountId, verified) || !verified)
+				{
+					MarkInboxResult(id, "not_verified", "Discord user is not verified");
+					LogAudit(discordUserId, accountId, action, "ticket", "not_verified", "Discord user is not verified", payload);
+					continue;
+				}
+
+				uint32 security = AccountMgr::GetSecurity(accountId);
+				uint32 required = std::max(g_Settings.minSecurity, GetCategoryMinSecurity("ticket"));
+				if (security < required)
+				{
+					MarkInboxResult(id, "forbidden", "Account security is too low");
+					LogAudit(discordUserId, accountId, action, "ticket", "forbidden", "Account security is too low", payload);
+					continue;
+				}
+
+				uint32 ticketId = 0;
+				std::string gmName;
+				std::string reason;
+				if (!ParseTicketClosePayload(payload, ticketId, gmName, reason))
+				{
+					MarkInboxResult(id, "invalid", "Invalid ticket close payload");
+					LogAudit(discordUserId, accountId, action, "ticket", "invalid", "Invalid ticket close payload", payload);
+					continue;
+				}
+
+				GmTicket* ticket = sTicketMgr->GetTicket(ticketId);
+				if (!ticket)
+				{
+					MarkInboxResult(id, "not_found", "Ticket not found");
+					LogAudit(discordUserId, accountId, action, "ticket", "not_found", "Ticket not found", payload);
+					continue;
+				}
+
+				ObjectGuid playerGuid = sCharacterCache->GetCharacterGuidByName(ticket->GetPlayerName());
+				if (playerGuid)
+				{
+					CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+					std::string subject = "Ticket Closed";
+					std::string body = Acore::StringFormat("Your ticket #{} has been closed.\n\nReason:\n{}", ticketId, reason);
+					MailDraft(subject, body).SendMailTo(trans, MailReceiver(playerGuid.GetCounter()),
+						MailSender(MAIL_NORMAL, 0, MAIL_STATIONERY_GM));
+					CharacterDatabase.CommitTransaction(trans);
+				}
+
+				std::string command = Acore::StringFormat(".ticket close {}", ticketId);
+				MarkInboxProcessing(id);
+				QueueCommand(id, discordUserId, accountId, command);
+				LogAudit(discordUserId, accountId, action, "ticket", "queued", "Ticket close queued", payload);
 			}
 			else
 			{
