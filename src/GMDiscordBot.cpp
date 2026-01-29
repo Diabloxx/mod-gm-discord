@@ -168,6 +168,9 @@ namespace GMDiscord
         {
             for (dpp::component const& row : components)
             {
+                if (row.custom_id == id && std::holds_alternative<std::string>(row.value))
+                    return std::get<std::string>(row.value);
+
                 for (dpp::component const& child : row.components)
                 {
                     if (child.custom_id == id)
@@ -908,14 +911,10 @@ namespace GMDiscord
                     .set_max_length(1000)
                     .set_required(true);
 
-				dpp::component reasonRow;
-				reasonRow.set_type(dpp::cot_action_row);
-				reasonRow.add_component(reasonInput);
-
 				dpp::interaction_modal_response modal;
 				modal.set_custom_id(Acore::StringFormat("gm_ticket_close:{}", ticketId));
 				modal.set_title("Close Ticket");
-				modal.add_component(reasonRow);
+				modal.add_component(reasonInput);
                 event.dialog(modal);
                 return;
             }
