@@ -53,9 +53,11 @@ namespace GMDiscord
         std::string _ticketRoomNameFormat;
         bool _ticketRoomPostUpdates = true;
         bool _ticketRoomArchiveOnClose = true;
+        std::unordered_set<uint64_t> _ticketRoomAllowedRoleIds;
         std::string _roleMappingsRaw;
 
         std::unordered_map<uint64_t, std::unordered_set<std::string>> _roleCategoryMap;
+        std::unordered_set<uint64_t> _adminRoleIds;
 
         std::atomic_bool _running{false};
         std::thread _thread;

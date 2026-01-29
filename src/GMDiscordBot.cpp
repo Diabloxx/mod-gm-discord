@@ -71,6 +71,28 @@ namespace GMDiscord
             return out;
         }
 
+        static std::unordered_set<uint64_t> ParseRoleList(std::string const& value)
+        {
+            std::unordered_set<uint64_t> out;
+            for (std::string const& entry : Split(value, ','))
+            {
+                std::string roleStr = Trim(entry);
+                if (roleStr.empty())
+                    continue;
+
+                try
+                {
+                    out.insert(std::stoull(roleStr));
+                }
+                catch (...)
+                {
+                    continue;
+                }
+            }
+
+            return out;
+        }
+
         static std::vector<std::string> Split(std::string const& value, char delim)
         {
             std::vector<std::string> out;
@@ -101,6 +123,20 @@ namespace GMDiscord
             if (text.size() <= DISCORD_MESSAGE_LIMIT)
                 return text;
             return text.substr(0, DISCORD_MESSAGE_LIMIT - 3) + "...";
+        }
+
+        static std::string EscapeFmtBraces(std::string const& value)
+        {
+            std::string out;
+            out.reserve(value.size() + 8);
+            for (char ch : value)
+            {
+                if (ch == '{' || ch == '}')
+                    out.push_back(ch);
+                out.push_back(ch);
+            }
+
+            return out;
         }
 
         static std::unordered_map<uint64_t, std::unordered_set<std::string>> ParseRoleMappings(std::string const& value)
@@ -194,21 +230,67 @@ namespace GMDiscord
             return false;
         }
 
-        static bool ExtractJsonBlock(std::string const& payload, std::string const& marker, std::string& out)
+        static bool FindJsonKeyStart(std::string const& payload, std::string const& key, size_t& pos)
         {
-            size_t start = payload.find(marker);
-            if (start == std::string::npos)
+            std::string needle = Acore::StringFormat("\"{}\":", key);
+            pos = payload.find(needle);
+            if (pos != std::string::npos)
+            {
+                pos += needle.size();
+                return true;
+            }
+
+            std::string escapedNeedle = Acore::StringFormat("\\\"{}\\\":", key);
+            pos = payload.find(escapedNeedle);
+            if (pos != std::string::npos)
+            {
+                pos += escapedNeedle.size();
+                return true;
+            }
+
+            return false;
+        }
+
+        static bool ExtractJsonBlock(std::string const& payload, std::string const& key, std::string& out)
+        {
+            size_t start = 0;
+            if (!FindJsonKeyStart(payload, key, start))
                 return false;
+
             start = payload.find('{', start);
             if (start == std::string::npos)
                 return false;
 
             int depth = 0;
+            bool inString = false;
+            bool escape = false;
             for (size_t i = start; i < payload.size(); ++i)
             {
-                if (payload[i] == '{')
+                char ch = payload[i];
+                if (escape)
+                {
+                    escape = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escape = true;
+                    continue;
+                }
+
+                if (ch == '"')
+                {
+                    inString = !inString;
+                    continue;
+                }
+
+                if (inString)
+                    continue;
+
+                if (ch == '{')
                     ++depth;
-                else if (payload[i] == '}')
+                else if (ch == '}')
                 {
                     --depth;
                     if (depth == 0)
@@ -224,28 +306,71 @@ namespace GMDiscord
 
         static bool ExtractJsonString(std::string const& payload, std::string const& key, std::string& out)
         {
-            std::string needle = Acore::StringFormat("\"{}\":\"", key);
-            size_t pos = payload.find(needle);
-            if (pos == std::string::npos)
+            size_t pos = 0;
+            if (!FindJsonKeyStart(payload, key, pos))
                 return false;
 
-            pos += needle.size();
-            size_t end = payload.find('"', pos);
-            if (end == std::string::npos)
+            while (pos < payload.size() && std::isspace(static_cast<unsigned char>(payload[pos])))
+                ++pos;
+
+            if (pos >= payload.size())
                 return false;
 
-            out = payload.substr(pos, end - pos);
-            return true;
+            if (payload[pos] == '\\' && pos + 1 < payload.size() && payload[pos + 1] == '"')
+                pos += 2;
+            else if (payload[pos] == '"')
+                ++pos;
+            else
+                return false;
+
+            std::string value;
+            value.reserve(32);
+            bool escape = false;
+            for (; pos < payload.size(); ++pos)
+            {
+                char ch = payload[pos];
+                if (escape)
+                {
+                    switch (ch)
+                    {
+                        case 'n': value.push_back('\n'); break;
+                        case 'r': value.push_back('\r'); break;
+                        case 't': value.push_back('\t'); break;
+                        case '\\': value.push_back('\\'); break;
+                        case '"': value.push_back('"'); break;
+                        default: value.push_back(ch); break;
+                    }
+                    escape = false;
+                    continue;
+                }
+
+                if (ch == '\\')
+                {
+                    escape = true;
+                    continue;
+                }
+
+                if (ch == '"')
+                {
+                    out = value;
+                    return true;
+                }
+
+                value.push_back(ch);
+            }
+
+            return false;
         }
 
         static bool ExtractJsonNumber(std::string const& payload, std::string const& key, std::string& out)
         {
-            std::string needle = Acore::StringFormat("\"{}\":", key);
-            size_t pos = payload.find(needle);
-            if (pos == std::string::npos)
+            size_t pos = 0;
+            if (!FindJsonKeyStart(payload, key, pos))
                 return false;
 
-            pos += needle.size();
+            while (pos < payload.size() && std::isspace(static_cast<unsigned char>(payload[pos])))
+                ++pos;
+
             size_t end = payload.find_first_of(",}", pos);
             if (end == std::string::npos)
                 return false;
@@ -274,7 +399,7 @@ namespace GMDiscord
         static bool BuildTicketEmbed(std::string const& eventType, std::string const& payload, dpp::embed& embed)
         {
             std::string ticketBlock;
-            if (!ExtractJsonBlock(payload, "\"ticket\":{", ticketBlock))
+            if (!ExtractJsonBlock(payload, "ticket", ticketBlock))
                 return false;
 
             uint32 id = 0;
@@ -325,7 +450,7 @@ namespace GMDiscord
         static bool BuildWhisperEmbed(std::string const& eventType, std::string const& payload, dpp::embed& embed)
         {
             std::string block;
-            if (!ExtractJsonBlock(payload, "\"whisper\":{", block))
+            if (!ExtractJsonBlock(payload, "whisper", block))
                 return false;
 
             std::string player;
@@ -356,7 +481,7 @@ namespace GMDiscord
         static bool BuildCommandResultEmbed(std::string const& payload, dpp::embed& embed)
         {
             std::string block;
-            if (!ExtractJsonBlock(payload, "\"command\":{", block))
+            if (!ExtractJsonBlock(payload, "command", block))
                 return false;
 
             uint32 id = 0;
@@ -486,8 +611,10 @@ namespace GMDiscord
         _ticketRoomNameFormat = sConfigMgr->GetOption<std::string>("GMDiscord.Bot.TicketRooms.NameFormat", "ticket-{id}-{player}");
         _ticketRoomPostUpdates = sConfigMgr->GetOption<bool>("GMDiscord.Bot.TicketRooms.PostUpdates", true);
         _ticketRoomArchiveOnClose = sConfigMgr->GetOption<bool>("GMDiscord.Bot.TicketRooms.ArchiveOnClose", true);
+        _ticketRoomAllowedRoleIds = ParseRoleList(sConfigMgr->GetOption<std::string>("GMDiscord.Bot.TicketRooms.AllowedRoles", ""));
         _roleMappingsRaw = sConfigMgr->GetOption<std::string>("GMDiscord.Bot.RoleMappings", "");
         _roleCategoryMap = ParseRoleMappings(_roleMappingsRaw);
+        _adminRoleIds.clear();
     }
 
     void DiscordBot::Start()
@@ -526,7 +653,7 @@ namespace GMDiscord
         _cluster = cluster;
         cluster->on_log([=](const dpp::log_t& event)
         {
-            LOG_INFO("module.gm_discord", "DPP: {}", event.message);
+            LOG_INFO("module.gm_discord", "DPP: {}", EscapeFmtBraces(event.message));
         });
 
         cluster->on_ready([=](const dpp::ready_t& event)
@@ -567,6 +694,28 @@ namespace GMDiscord
                 else
                     cluster->global_command_create(assign);
 
+                if (_guildId && _ticketRoomsEnabled && _roleCategoryMap.empty())
+                {
+                    auto* clusterPtr = static_cast<dpp::cluster*>(_cluster);
+                    if (clusterPtr)
+                    {
+                        clusterPtr->guild_get_roles(_guildId, [this](const dpp::confirmation_callback_t& cb)
+                        {
+                            if (cb.is_error())
+                                return;
+
+                            _adminRoleIds.clear();
+                            auto roles = std::get<dpp::role_map>(cb.value);
+                            for (auto const& entry : roles)
+                            {
+                                dpp::role const& role = entry.second;
+                                if ((role.permissions & dpp::p_administrator) == dpp::p_administrator)
+                                    _adminRoleIds.insert(static_cast<uint64_t>(role.id));
+                            }
+                        });
+                    }
+                }
+
                 LOG_INFO("module.gm_discord", "Discord bot ready.");
             }
 
@@ -595,13 +744,13 @@ namespace GMDiscord
                         if (eventType.rfind("ticket_", 0) == 0)
                         {
                             std::string ticketBlock;
-                            if (ExtractJsonBlock(payload, "\"ticket\":{", ticketBlock))
+                            if (ExtractJsonBlock(payload, "ticket", ticketBlock))
                                 hasTicketId = ExtractJsonUint(ticketBlock, "id", ticketId);
                         }
                         else if (eventType == "player_whisper" || eventType == "gm_whisper")
                         {
                             std::string whisperBlock;
-                            if (ExtractJsonBlock(payload, "\"whisper\":{", whisperBlock))
+                            if (ExtractJsonBlock(payload, "whisper", whisperBlock))
                                 hasTicketId = ExtractJsonUint(whisperBlock, "ticketId", ticketId);
                         }
 
@@ -641,10 +790,16 @@ namespace GMDiscord
 
                                 std::vector<dpp::permission_overwrite> overwrites;
 
-                                std::unordered_set<uint64_t> allowedRoles;
-                                for (std::unordered_map<uint64_t, std::unordered_set<std::string>>::const_iterator it = _roleCategoryMap.begin();
-                                    it != _roleCategoryMap.end(); ++it)
-                                    allowedRoles.insert(it->first);
+                                std::unordered_set<uint64_t> allowedRoles = _ticketRoomAllowedRoleIds;
+                                if (allowedRoles.empty())
+                                {
+                                    for (std::unordered_map<uint64_t, std::unordered_set<std::string>>::const_iterator it = _roleCategoryMap.begin();
+                                        it != _roleCategoryMap.end(); ++it)
+                                        allowedRoles.insert(it->first);
+                                }
+
+                                if (allowedRoles.empty())
+                                    allowedRoles.insert(_adminRoleIds.begin(), _adminRoleIds.end());
 
                                 bool allowEveryone = allowedRoles.empty();
                                 if (!allowEveryone)

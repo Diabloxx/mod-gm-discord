@@ -494,7 +494,7 @@ namespace GMDiscord
 			MarkInboxResult(ctx->id, success ? "ok" : "error", ctx->output);
 
 			std::string payload = Acore::StringFormat(
-				R"({"event":"command_result","command":{"id":{},"status":"{}","output":"{}"},"timestamp":{}})",
+				R"({{"event":"command_result","command":{{"id":{},"status":"{}","output":"{}"}},"timestamp":{}}})",
 				ctx->id,
 				success ? "ok" : "error",
 				EscapeJson(ctx->output),
@@ -661,7 +661,7 @@ namespace GMDiscord
 					ticketId = ticket->GetId();
 
 				std::string outPayload = Acore::StringFormat(
-					R"({"event":"gm_whisper","whisper":{"player":"{}","playerGuid":{},"gmName":"{}","discordUserId":{},"ticketId":{},"message":"{}"},"timestamp":{}})",
+					R"({{"event":"gm_whisper","whisper":{{"player":"{}","playerGuid":{},"gmName":"{}","discordUserId":{},"ticketId":{},"message":"{}"}},"timestamp":{}}})",
 					EscapeJson(player->GetName()),
 					player->GetGUID().GetRawValue(),
 					EscapeJson(gmName),
@@ -721,8 +721,8 @@ namespace GMDiscord
 		std::string status = ticket->IsClosed() ? "closed" : (ticket->IsCompleted() ? "completed" : "open");
 		std::string assignedTo = ticket->GetAssignedToName();
 
-		return Acore::StringFormat(
-			R"({"event":"{}","ticket":{"id":{},"player":"{}","message":"{}","comment":"{}","response":"{}","assignedTo":"{}","assignedToGuid":{},"status":"{}","escalationStatus":{},"viewed":{},"needResponse":{},"needMoreHelp":{},"createTime":{},"lastModified":{},"closedByGuid":{},"resolvedByGuid":{},"location":{"mapId":{},"x":{},"y":{},"z":{}}}})",
+	return Acore::StringFormat(
+		R"({{"event":"{}","ticket":{{"id":{},"player":"{}","message":"{}","comment":"{}","response":"{}","assignedTo":"{}","assignedToGuid":{},"status":"{}","escalationStatus":{},"viewed":{},"needResponse":{},"needMoreHelp":{},"createTime":{},"lastModified":{},"closedByGuid":{},"resolvedByGuid":{},"location":{{"mapId":{},"x":{},"y":{},"z":{}}}}}}})",
 			eventName,
 			ticket->GetId(),
 			EscapeJson(ticket->GetPlayerName()),
@@ -759,6 +759,9 @@ public:
 
 	void OnTicketUpdateLastChange(GmTicket* ticket) override
 	{
+		if (ticket && ticket->GetCreateTime() == ticket->GetLastModifiedTime())
+			return;
+
 		GMDiscord::EnqueueOutbox("ticket_update", GMDiscord::BuildTicketPayload(ticket, "ticket_update"));
 	}
 
@@ -962,7 +965,7 @@ public:
 			ticketId = ticket->GetId();
 
 		std::string payload = Acore::StringFormat(
-			R"({"event":"player_whisper","whisper":{"player":"{}","playerGuid":{},"gmName":"{}","discordUserId":{},"ticketId":{},"message":"{}"},"timestamp":{}})",
+			R"({{"event":"player_whisper","whisper":{{"player":"{}","playerGuid":{},"gmName":"{}","discordUserId":{},"ticketId":{},"message":"{}"}},"timestamp":{}}})",
 			GMDiscord::EscapeJson(player->GetName()),
 			player->GetGUID().GetRawValue(),
 			GMDiscord::EscapeJson(receiverName),
