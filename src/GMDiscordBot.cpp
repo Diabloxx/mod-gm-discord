@@ -920,12 +920,21 @@ namespace GMDiscord
                                 auto threadIt = _ticketThreadIds.find(ticketId);
                                 if (threadIt != _ticketThreadIds.end())
                                 {
-                                    dpp::thread threadChannel;
-                                    threadChannel.id = threadIt->second;
-                                    threadChannel.metadata.auto_archive_duration = 1440;
-                                    threadChannel.metadata.archived = true;
-                                    threadChannel.metadata.locked = true;
-                                    clusterPtr->thread_edit(threadChannel);
+                                    uint64_t threadId = threadIt->second;
+                                    clusterPtr->thread_get(threadId, [this, clusterPtr, threadId](const dpp::confirmation_callback_t& cb)
+                                    {
+                                        if (cb.is_error())
+                                        {
+                                            _threadTicketIds.erase(threadId);
+                                            return;
+                                        }
+
+                                        auto threadInfo = std::get<dpp::thread>(cb.value);
+                                        threadInfo.metadata.auto_archive_duration = 1440;
+                                        threadInfo.metadata.archived = true;
+                                        threadInfo.metadata.locked = true;
+                                        clusterPtr->thread_edit(threadInfo);
+                                    });
                                     _threadTicketIds.erase(threadIt->second);
                                     _ticketThreadIds.erase(threadIt);
                                 }
@@ -962,44 +971,63 @@ namespace GMDiscord
             if (event.msg.author.is_bot())
                 return;
 
-            auto threadIt = _threadTicketIds.find(static_cast<uint64_t>(event.msg.channel_id));
-            if (threadIt == _threadTicketIds.end())
+            auto* clusterPtr = static_cast<dpp::cluster*>(_cluster);
+            if (!clusterPtr)
                 return;
 
-            uint32 ticketId = threadIt->second;
-
-            GmTicket* ticket = sTicketMgr->GetTicket(ticketId);
-            if (!ticket || ticket->IsClosed())
-            {
-                auto* clusterPtr = static_cast<dpp::cluster*>(_cluster);
-                if (clusterPtr)
-                    clusterPtr->message_create(dpp::message(event.msg.channel_id, "Ticket is closed or unavailable."));
-                return;
-            }
-
+            uint64 threadId = static_cast<uint64_t>(event.msg.channel_id);
             uint64 discordUserId = event.msg.author.id;
-            std::string gmName;
-            if (!GetGmNameForDiscordUser(discordUserId, gmName))
-            {
-                auto* clusterPtr = static_cast<dpp::cluster*>(_cluster);
-                if (clusterPtr)
-                    clusterPtr->message_create(dpp::message(event.msg.channel_id, "You are not linked. Use in-game .discord link <secret>."));
-                return;
-            }
 
             std::string displayName = event.msg.member.get_nickname();
             if (displayName.empty())
                 displayName = event.msg.author.username;
             displayName = SanitizeWhisperName(displayName);
-            if (displayName.empty())
-                displayName = gmName;
-
             std::string content = Trim(event.msg.content);
             if (content.empty())
                 return;
 
-            std::string payload = ticket->GetPlayerName() + "|" + displayName + "|" + content;
-            InsertInboxAction(discordUserId, "whisper", payload);
+            auto processTicket = [this, clusterPtr, threadId, discordUserId, displayName, content](uint32 ticketId)
+            {
+                GmTicket* ticket = sTicketMgr->GetTicket(ticketId);
+                if (!ticket || ticket->IsClosed())
+                {
+                    clusterPtr->message_create(dpp::message(threadId, "Ticket is closed or unavailable."));
+                    return;
+                }
+
+                std::string gmName;
+                if (!GetGmNameForDiscordUser(discordUserId, gmName))
+                {
+                    clusterPtr->message_create(dpp::message(threadId, "You are not linked. Use in-game .discord link <secret>."));
+                    return;
+                }
+
+                std::string senderName = displayName.empty() ? gmName : displayName;
+                std::string payload = ticket->GetPlayerName() + "|" + senderName + "|" + content;
+                InsertInboxAction(discordUserId, "whisper", payload);
+            };
+
+            auto threadIt = _threadTicketIds.find(threadId);
+            if (threadIt != _threadTicketIds.end())
+            {
+                processTicket(threadIt->second);
+                return;
+            }
+
+            clusterPtr->thread_get(threadId, [this, threadId, processTicket](const dpp::confirmation_callback_t& cb)
+            {
+                if (cb.is_error())
+                    return;
+
+                auto threadInfo = std::get<dpp::thread>(cb.value);
+                uint32 ticketId = 0;
+                if (!TryParseTicketIdFromThreadName(threadInfo.name, ticketId))
+                    return;
+
+                _threadTicketIds[threadId] = ticketId;
+                _ticketThreadIds[ticketId] = threadId;
+                processTicket(ticketId);
+            });
         });
 
         cluster->on_slashcommand([=](const dpp::slashcommand_t& event)
