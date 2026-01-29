@@ -978,15 +978,11 @@ namespace GMDiscord
             uint64 threadId = static_cast<uint64_t>(event.msg.channel_id);
             uint64 discordUserId = event.msg.author.id;
 
-            std::string displayName = event.msg.member.get_nickname();
-            if (displayName.empty())
-                displayName = event.msg.author.username;
-            displayName = SanitizeWhisperName(displayName);
             std::string content = Trim(event.msg.content);
             if (content.empty())
                 return;
 
-            auto processTicket = [this, clusterPtr, threadId, discordUserId, displayName, content](uint32 ticketId)
+            auto processTicket = [this, clusterPtr, threadId, discordUserId, content](uint32 ticketId)
             {
                 GmTicket* ticket = sTicketMgr->GetTicket(ticketId);
                 if (!ticket || ticket->IsClosed())
@@ -1002,8 +998,7 @@ namespace GMDiscord
                     return;
                 }
 
-                std::string senderName = displayName.empty() ? gmName : displayName;
-                std::string payload = ticket->GetPlayerName() + "|" + senderName + "|" + content;
+                std::string payload = ticket->GetPlayerName() + "|" + gmName + "|" + content;
                 InsertInboxAction(discordUserId, "whisper", payload);
             };
 
