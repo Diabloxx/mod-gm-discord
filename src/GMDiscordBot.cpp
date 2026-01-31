@@ -1099,8 +1099,31 @@ namespace GMDiscord
 								continue;
 							}
 
-                            bool createThread = (eventType == "ticket_create" && hasTicketId);
-                            if (createThread)
+							bool createThread = (eventType == "ticket_create" && hasTicketId);
+							bool isTicketUpdate = (eventType.rfind("ticket_", 0) == 0 && eventType != "ticket_create" && hasTicketId);
+							bool editedMessage = false;
+
+							if (isTicketUpdate)
+							{
+								auto messageIt = _ticketMessageIds.find(ticketId);
+								if (messageIt != _ticketMessageIds.end())
+								{
+									dpp::message editMessage(_outboxChannelId, "");
+									editMessage.id = messageIt->second;
+									if (hasEmbed)
+										editMessage.add_embed(embed);
+									else
+										editMessage.set_content(TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload)));
+
+									clusterPtr->message_edit(editMessage);
+									editedMessage = true;
+								}
+							}
+
+							if (editedMessage)
+							{
+							}
+							else if (createThread)
                             {
                                 std::string playerName;
                                 if (!ExtractJsonString(payload, "player", playerName))
@@ -1111,12 +1134,13 @@ namespace GMDiscord
                                     ? dpp::message(_outboxChannelId, "").add_embed(embed)
                                     : dpp::message(_outboxChannelId, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload)));
 
-                                clusterPtr->message_create(outMessage, [this, clusterPtr, threadName, ticketId](const dpp::confirmation_callback_t& cb)
+								clusterPtr->message_create(outMessage, [this, clusterPtr, threadName, ticketId](const dpp::confirmation_callback_t& cb)
                                 {
                                     if (cb.is_error())
                                         return;
 
                                     auto created = std::get<dpp::message>(cb.value);
+									_ticketMessageIds[ticketId] = static_cast<uint64_t>(created.id);
                                     clusterPtr->thread_create_with_message(threadName, created.channel_id, created.id, 1440, 0,
                                         [this, clusterPtr, ticketId](const dpp::confirmation_callback_t& threadCb)
                                         {
@@ -1135,14 +1159,45 @@ namespace GMDiscord
                                         });
                                 });
                             }
-                            else if (hasEmbed)
-                            {
-                                clusterPtr->message_create(dpp::message(_outboxChannelId, "").add_embed(embed));
-                            }
-                            else
-                            {
-                                clusterPtr->message_create(dpp::message(_outboxChannelId, TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload))));
-                            }
+							else if (hasEmbed)
+							{
+								if (hasTicketId && eventType.rfind("ticket_", 0) == 0)
+								{
+									clusterPtr->message_create(dpp::message(_outboxChannelId, "").add_embed(embed),
+										[this, ticketId](const dpp::confirmation_callback_t& cb)
+										{
+											if (!cb.is_error())
+											{
+												auto created = std::get<dpp::message>(cb.value);
+												_ticketMessageIds[ticketId] = static_cast<uint64_t>(created.id);
+											}
+										});
+								}
+								else
+								{
+									clusterPtr->message_create(dpp::message(_outboxChannelId, "").add_embed(embed));
+								}
+							}
+							else
+							{
+								std::string content = TruncateForDiscord(Acore::StringFormat("[{}] {}", eventType, payload));
+								if (hasTicketId && eventType.rfind("ticket_", 0) == 0)
+								{
+									clusterPtr->message_create(dpp::message(_outboxChannelId, content),
+										[this, ticketId](const dpp::confirmation_callback_t& cb)
+										{
+											if (!cb.is_error())
+											{
+												auto created = std::get<dpp::message>(cb.value);
+												_ticketMessageIds[ticketId] = static_cast<uint64_t>(created.id);
+											}
+										});
+								}
+								else
+								{
+									clusterPtr->message_create(dpp::message(_outboxChannelId, content));
+								}
+							}
                         }
 
                         if (_ticketRoomsEnabled && hasTicketId && _ticketRoomCategoryId && _guildId)

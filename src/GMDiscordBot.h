@@ -56,6 +56,7 @@ namespace GMDiscord
         std::unordered_set<uint64_t> _ticketRoomAllowedRoleIds;
         std::unordered_map<uint32_t, uint64_t> _ticketThreadIds;
         std::unordered_map<uint64_t, uint32_t> _threadTicketIds;
+        std::unordered_map<uint32_t, uint64_t> _ticketMessageIds;
         std::string _roleMappingsRaw;
 
         std::unordered_map<uint64_t, std::unordered_set<std::string>> _roleCategoryMap;
